@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="ハコログ">
+<title>ハコログ</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+* { -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
+body { margin:0; padding:0; background:#f3f4f6; font-family:'Hiragino Sans','Hiragino Kaku Gothic ProN','Noto Sans JP',sans-serif; }
+input,textarea { font-family:inherit; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect } = React;
+const pad = n => String(n).padStart(2,"0");
+function formatDuration(ms){if(!ms||ms<=0)return"00:00:00";const s=Math.floor(ms/1000);return`${pad(Math.floor(s/3600))}:${pad(Math.floor((s%3600)/60))}:${pad(s%60)}`;}
+function formatTime(d){if(!d)return"--:--";return new Date(d).toLocaleTimeString("ja-JP",{hour:"2-digit",minute:"2-digit"});}
+function formatDateJP(d){const dow=["日","月","火","水","木","金","土"][d.getDay()];return{full:`${d.getFullYear()}年${d.getMonth()+1}月${d.getDate()}日`,dow:`${dow}曜日`};}
+function workLabel(min){if(!min||min<=0)return"0分";const h=Math.floor(min/60),m=min%60;return h>0?(m>0?`${h}時間${m}分`:`${h}時間`):`${m}分`;}
+function getBindLevel(min){if(min>=841)return 4;if(min>=840)return 3;if(min>=780)return 2;if(min>=720)return 1;return 0;}
+
+const HEALTH_CHECKS=["飲酒・残酒はない","発熱・頭痛・腹痛・痛みを伴う怪我はない","著しい疲労はない・気分は悪くない","運転に悪影響を及ぼす薬の服用はない","特定の疾病に関する確認事項","安全運転に影響を及ぼす睡眠不足はない"];
+const REQUIRED_CHECKS=[{section:"ブレーキ・駐車ブレーキ",items:["踏みしろ・きき具合","液量","レバーの引きしろ"]},{section:"タイヤ",items:["空気圧","亀裂・損傷","異状摩耗","点灯・点滅具合、汚れ・損傷（灯火装置）","ディスク・ホイールの取付状態"]}];
+const OPTIONAL_CHECKS=[{section:"タイヤ",items:["溝の深さ"]},{section:"バッテリー",items:["液量"]},{section:"ウィンドウ・ウォッシャ、ワイパー",items:["液量・噴射状態","払拭状態"]},{section:"原動機",items:["かかり具合・異音","低速・加速の状態","エンジンオイルの量","冷却水の量","ファン・ベルト張り・損傷"]}];
+
+const LS_KEY="hakolog_v3";
+function saveLS(k,v){try{localStorage.setItem(k,JSON.stringify(v));}catch(e){}}
+function loadLS(k){try{const r=localStorage.getItem(k);return r?JSON.parse(r):null;}catch(e){return null;}}
+function revive(raw){if(!raw)return null;return{...raw,clockInAt:raw.clockInAt?new Date(raw.clockInAt):null,clockOutAt:raw.clockOutAt?new Date(raw.clockOutAt):null,breakStartAt:raw.breakStartAt?new Date(raw.breakStartAt):null,breakLogs:(raw.breakLogs||[]).map(l=>({...l,start:new Date(l.start),end:l.end?new Date(l.end):null}))};}
+function todayStr(){const d=new Date();return`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;}
+const DEFAULT={status:"pre-work",clockInAt:null,clockOutAt:null,breakStartAt:null,totalBreakMinutes:0,breakLocation:"",breakLogs:[],breakConfirmed:false,healthOk:false,alcoholCheckDone:false,appearanceCheckDone:false};
+
+function Logo(){return(<div className="flex items-center gap-2.5"><div className="bg-teal-600 rounded-xl w-10 h-10 flex items-center justify-center flex-shrink-0 shadow-sm"><svg width="24" height="18" viewBox="0 0 24 18" fill="none"><rect x="0" y="2" width="15" height="11" rx="1.5" fill="white" opacity="0.95"/><rect x="15" y="5" width="8" height="8" rx="1" fill="white" opacity="0.8"/><rect x="16" y="6" width="5.5" height="3.5" rx="0.5" fill="#0f766e"/><circle cx="4.5" cy="15.5" r="2.3" fill="#134e4a"/><circle cx="4.5" cy="15.5" r="1.1" fill="white" opacity="0.8"/><circle cx="18" cy="15.5" r="2.3" fill="#134e4a"/><circle cx="18" cy="15.5" r="1.1" fill="white" opacity="0.8"/><line x1="1.5" y1="8" x2="14" y2="8" stroke="#0f766e" strokeWidth="1" opacity="0.35"/></svg></div><div className="leading-tight"><p className="text-xl font-black text-gray-800 tracking-tight leading-none">ハコログ</p><p className="text-[10px] text-gray-400 font-medium leading-none mt-0.5">Truck Management System</p></div></div>);}
+
+function Modal({title,message,confirmLabel,cancelLabel,onConfirm,onCancel,danger}){return(<div className="fixed inset-0 bg-black/50 flex items-end z-50" onClick={onCancel}><div className="bg-white rounded-t-2xl w-full p-5 pb-6" style={{maxWidth:390,margin:"0 auto"}} onClick={e=>e.stopPropagation()}><div className="text-center mb-4"><h3 className="text-lg font-bold text-gray-900">{title}</h3>{message&&<p className="text-sm text-gray-500 mt-1">{message}</p>}</div><div className="flex flex-col gap-2"><button onClick={onConfirm} className={`w-full font-bold text-base rounded-xl py-3.5 text-white ${danger?"bg-red-500":"bg-teal-500"}`}>{confirmLabel}</button><button onClick={onCancel} className="w-full font-bold text-base rounded-xl py-3.5 bg-gray-100 text-gray-600">{cancelLabel||"キャンセル"}</button></div></div></div>);}
+
+function BreakStartModal({onConfirm,onCancel}){const[loc,setLoc]=useState("");const ok=loc.trim().length>0;return(<div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 px-4" onClick={onCancel}><div className="bg-white rounded-2xl w-full shadow-xl overflow-hidden" style={{maxWidth:360}} onClick={e=>e.stopPropagation()}><div className="bg-teal-600 px-5 py-4"><h3 className="text-base font-bold text-white">休憩開始確認</h3></div><div className="px-5 py-5"><p className="text-sm text-gray-700 mb-4">休憩を開始しますか？</p><label className="text-xs font-bold text-teal-600 block mb-1">休憩地点<span className="text-red-500 ml-0.5">*</span></label><input value={loc} onChange={e=>setLoc(e.target.value.slice(0,50))} autoFocus className="w-full border-b-2 border-red-300 focus:border-teal-500 outline-none py-1.5 text-sm text-gray-800 bg-transparent"/><div className="flex justify-end mt-0.5"><span className="text-xs text-gray-400">{loc.length}/50</span></div></div><div className="flex border-t border-gray-200"><button onClick={onCancel} className="flex-1 py-3.5 text-sm font-bold text-gray-500 border-r border-gray-200">キャンセル</button><button onClick={()=>ok&&onConfirm(loc.trim())} disabled={!ok} className={`flex-1 py-3.5 text-sm font-bold ${ok?"text-teal-600":"text-gray-300"}`}>OK</button></div></div></div>);}
+
+function CheckItem({label,value,onChange,required}){return(<div className="py-2"><p className="text-xs text-gray-700 mb-1.5">{label}{required&&<span className="text-red-500 ml-0.5">*</span>}</p><div className="grid grid-cols-2 gap-1.5"><button onClick={()=>onChange("repair")} className={`py-2 rounded-lg text-sm font-medium ${value==="repair"?"bg-gray-400 text-white":"bg-gray-100 text-gray-500"}`}>修理対応</button><button onClick={()=>onChange("ok")} className={`py-2 rounded-lg text-sm font-medium ${value==="ok"?"bg-red-400 text-white":"bg-gray-100 text-gray-400"}`}>良</button></div></div>);}
+
+function BellIcon(){return(<svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" stroke="#6b7280" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/><path d="M13.73 21a2 2 0 0 1-3.46 0" stroke="#6b7280" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>);}
+
+function HomeScreen({att,setAtt,alerts,onNav,pendingModal,clearPendingModal}){
+  const[now,setNow]=useState(new Date());
+  const[modal,setModal]=useState(null);
+  const[countdown,setCountdown]=useState(null);
+  useEffect(()=>{const t=setInterval(()=>setNow(new Date()),1000);return()=>clearInterval(t);},[]);
+  useEffect(()=>{if(pendingModal){setModal(pendingModal);if(clearPendingModal)clearPendingModal();}},[pendingModal]);
+  useEffect(()=>{if(att.status==="completed")setCountdown(5);},[att.status]);
+  useEffect(()=>{if(countdown===null)return;if(countdown<=0){setAtt({...DEFAULT});setCountdown(null);return;}const t=setTimeout(()=>setCountdown(c=>c-1),1000);return()=>clearTimeout(t);},[countdown]);
+  const unread=alerts.filter(a=>!a.isRead).length;
+  const today=formatDateJP(now);
+  const bindMs=att.clockInAt?(att.status==="completed"&&att.clockOutAt?new Date(att.clockOutAt)-new Date(att.clockInAt):now-new Date(att.clockInAt)):0;
+  const bindMin=Math.floor(bindMs/60000);
+  const bindLevel=getBindLevel(bindMin);
+  const breakOngoingMs=att.status==="on-break"&&att.breakStartAt?Math.max(0,now.getTime()-new Date(att.breakStartAt).getTime()):0;
+  const totalBreakMin=att.totalBreakMinutes+(att.status==="on-break"&&att.breakStartAt?Math.floor((now-new Date(att.breakStartAt))/60000):0);
+  const workMin=Math.max(0,bindMin-totalBreakMin);
+  const doClockIn=()=>{setModal(null);setAtt({...att,status:"working",clockInAt:new Date()});};
+  const doBreakStart=loc=>{setModal(null);setAtt({...att,status:"on-break",breakStartAt:new Date(),breakLocation:loc});};
+  const doBreakEnd=()=>{setModal(null);const st=new Date(att.breakStartAt),et=new Date();const min=Math.floor((et-st)/60000);const valid=min>=10;const newLog={id:Date.now(),start:st,end:et,minutes:min,location:att.breakLocation||"",valid};setAtt({...att,status:"working",breakStartAt:null,breakLocation:"",totalBreakMinutes:att.totalBreakMinutes+(valid?min:0),breakLogs:[...(att.breakLogs||[]),newLog]});};
+  const doClockOut=()=>{setModal(null);const extra=att.status==="on-break"&&att.breakStartAt?Math.floor((Date.now()-new Date(att.breakStartAt))/60000):0;setAtt({...att,status:"completed",clockOutAt:new Date(),breakStartAt:null,totalBreakMinutes:att.totalBreakMinutes+extra});};
+
+  if(att.status==="on-break"){
+    const sec=Math.max(0,Math.floor(breakOngoingMs/1000));
+    const min=Math.floor(sec/60);
+    const isUnder10=min<10;
+    const elStr=`${pad(Math.floor(sec/3600))}:${pad(Math.floor((sec%3600)/60))}:${pad(sec%60)}`;
+    const bTotal=att.totalBreakMinutes+(min>=10?min:0);
+    return(<div className="flex flex-col h-full bg-white">
+      <div className="bg-white border-b border-gray-200 px-4 py-2.5 flex items-center justify-between flex-shrink-0"><Logo/><button onClick={()=>onNav("alerts")} className="relative p-1"><BellIcon/>{unread>0&&<span className="absolute -top-0.5 -right-0.5 bg-red-500 text-white text-[10px] font-bold rounded-full w-4 h-4 flex items-center justify-center">{unread}</span>}</button></div>
+      <div className="flex-1 flex flex-col px-5 py-6 gap-5 overflow-y-auto">
+        <h2 className="text-2xl font-black text-gray-800 text-center">休憩中です。</h2>
+        <div className="bg-gray-50 rounded-2xl border border-gray-200 px-5 py-4 flex flex-col gap-3">
+          <div className="flex items-center justify-between"><span className="text-sm text-gray-500">休憩開始時間</span><span className="text-lg font-bold text-gray-900">{formatTime(att.breakStartAt)}</span></div>
+          <div className="border-t border-gray-100"/>
+          <div className="flex items-center justify-between"><span className="text-sm text-gray-500">休憩経過時間</span><span className={`text-lg font-bold font-mono ${isUnder10?"text-gray-500":"text-teal-600"}`}>{elStr}</span></div>
+          <div className="border-t border-gray-100"/>
+          <div className="flex items-center justify-between"><span className="text-sm text-gray-500">休憩累計時間</span><span className="text-lg font-bold text-gray-900">{bTotal>=60?`${Math.floor(bTotal/60)}時間${bTotal%60}分`:`${bTotal}分`}</span></div>
+          {att.breakLocation&&<><div className="border-t border-gray-100"/><div className="flex items-center justify-between"><span className="text-sm text-gray-500">休憩地点</span><span className="text-sm font-medium text-gray-700">{att.breakLocation}</span></div></>}
+        </div>
+        {isUnder10&&<div className="bg-red-50 rounded-xl border border-red-200 px-4 py-3 text-center"><p className="text-red-600 text-sm font-bold">10分間未満は休憩時間に<br/>カウントされません</p><p className="text-red-400 text-xs mt-1">あと {10-min} 分でカウント開始</p></div>}
+        {(att.breakLogs||[]).length>0&&<div className="bg-gray-50 rounded-xl border border-gray-200 overflow-hidden"><div className="px-4 py-2 bg-gray-100 border-b border-gray-200"><p className="text-xs font-bold text-gray-600">本日の休憩履歴</p></div>{(att.breakLogs||[]).map((log,i)=>(<div key={log.id} className={`px-4 py-2.5 ${i<att.breakLogs.length-1?"border-b border-gray-100":""} ${!log.valid?"bg-gray-100 opacity-60":"bg-white"}`}><p className="text-sm font-medium text-gray-800">{formatTime(log.start)} 〜 {formatTime(log.end)}（{log.minutes}分）</p><p className="text-xs text-gray-400">{log.location}{!log.valid&&" (10分未満)"}</p></div>))}</div>}
+      </div>
+      <div className="px-5 pb-6 flex-shrink-0 bg-white"><button onClick={()=>setModal("break-end")} className="w-full bg-teal-500 text-white font-black text-lg rounded-xl py-4">休憩を終了する</button></div>
+      {modal==="break-end"&&<Modal title="休憩を終了しますか？" message={isUnder10?`⚠️ ${min}分（10分未満のため累計に含まれません）`:`今回の休憩: ${min}分`} confirmLabel="休憩終了する" onConfirm={doBreakEnd} onCancel={()=>setModal(null)}/>}
+    </div>);
+  }
+
+  return(<div className="flex flex-col h-full bg-gray-50">
+    <div className="bg-white border-b border-gray-200 px-4 py-2.5 flex items-center justify-between flex-shrink-0"><Logo/><button onClick={()=>onNav("alerts")} className="relative p-1"><BellIcon/>{unread>0&&<span className="absolute -top-0.5 -right-0.5 bg-red-500 text-white text-[10px] font-bold rounded-full w-4 h-4 flex items-center justify-center">{unread}</span>}</button></div>
+    <div className="bg-white border-b border-gray-200 px-4 py-2 text-center flex-shrink-0"><p className="text-base font-bold text-gray-900">{today.full}</p><p className="text-xs text-gray-400">{today.dow}</p></div>
+    <div className="flex-1 flex flex-col px-4 py-3 gap-3 overflow-y-auto">
+      {att.clockInAt&&<div className="bg-white rounded-xl border border-gray-200 overflow-hidden flex-shrink-0"><div className="grid grid-cols-3 border-b border-gray-100 px-3 py-1.5"><span className="text-xs text-gray-400">拘束時間</span><span className="text-xs text-gray-400 text-center">実働時間</span><span className="text-xs text-gray-400 text-right">休憩時間</span></div><div className="grid grid-cols-3 px-3 py-2 items-center"><span className={`text-sm font-bold ${bindLevel>0?"text-orange-600":"text-gray-900"}`}>{formatDuration(bindMs).slice(0,5)}</span><span className="text-sm font-bold text-gray-900 text-center">{workLabel(workMin)}</span><span className="text-sm font-bold text-gray-900 text-right">{totalBreakMin}分</span></div><div className="px-3 pb-2 flex items-center justify-between"><p className="text-xs text-gray-400">出勤 {formatTime(att.clockInAt)}{att.clockOutAt?` → 退勤 ${formatTime(att.clockOutAt)}`:""}</p><span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${att.status==="working"?"bg-teal-100 text-teal-700":"bg-gray-100 text-gray-500"}`}>{att.status==="working"?"出勤中":"退勤済"}</span></div></div>}
+      {bindLevel>0&&att.clockInAt&&<div className={`rounded-xl px-3 py-2 border flex-shrink-0 ${bindLevel>=3?"bg-red-50 border-red-300":bindLevel===2?"bg-orange-50 border-orange-200":"bg-yellow-50 border-yellow-200"}`}><p className={`text-xs font-bold ${bindLevel>=3?"text-red-700":bindLevel===2?"text-orange-700":"text-yellow-700"}`}>{bindLevel>=4?"🚫 法令違反：拘束14時間超":bindLevel===3?"🚨 重大警告：拘束14時間に達します":bindLevel===2?"⚠️ 警告：拘束13時間超":"ℹ️ 注意：拘束12時間超"}</p></div>}
+      <div className="flex-shrink-0">
+        {att.status==="pre-work"&&<div className="flex flex-col gap-1.5"><button onClick={()=>setModal("clockin")} className="w-full bg-teal-500 text-white font-black text-xl rounded-2xl py-6 shadow-md">出勤</button><p className="text-xs text-gray-400 text-center">出勤ボタンを押して勤務を開始してください</p></div>}
+        {att.status==="working"&&<div><p className="text-xs font-semibold text-gray-500 mb-1.5 px-1">運転日報</p><div className="flex gap-2"><button onClick={()=>onNav("daily-report-pre")} className="flex-1 bg-white border-2 border-teal-500 text-teal-600 font-bold text-sm rounded-xl py-4 flex items-center justify-center gap-1.5">🚛 乗務前日報</button><button onClick={()=>onNav("daily-report-post")} className="flex-1 bg-teal-500 text-white font-bold text-sm rounded-xl py-4 flex items-center justify-center gap-1.5">🚛 乗務後日報</button></div></div>}
+        {att.status==="completed"&&<div className="bg-teal-50 border-2 border-teal-200 rounded-2xl p-5 text-center"><p className="text-3xl mb-1">👋</p><p className="text-teal-700 font-black text-xl">お疲れさまでした！</p><p className="text-teal-500 text-sm mt-1">退勤 {formatTime(att.clockOutAt)}</p>{countdown!==null&&<p className="text-gray-400 text-xs mt-2">{countdown}秒後にリセットします...</p>}</div>}
+      </div>
+      {att.status!=="pre-work"&&<div className="flex-shrink-0 flex flex-col gap-3">
+        <div><p className="text-xs font-semibold text-gray-500 mb-1.5 px-1">乗務前チェック</p>
+          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+            {[{id:"alcohol",label:"アルコールチェック",checked:att.alcoholCheckDone},{id:"appearance",label:"身だしなみチェック",checked:att.appearanceCheckDone}].map((item,i,arr)=>(
+              <div key={item.id} onClick={()=>setAtt({...att,[item.id==="alcohol"?"alcoholCheckDone":"appearanceCheckDone"]:!item.checked})} className={`flex items-center gap-3 px-4 py-3.5 cursor-pointer ${i<arr.length-1?"border-b border-gray-100":""}`}>
+                <div className={`w-5 h-5 rounded border-2 flex items-center justify-center flex-shrink-0 ${item.checked?"bg-teal-500 border-teal-500":"border-gray-300 bg-white"}`}>{item.checked&&<svg className="w-3 h-3" viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>}</div>
+                <span className={`text-sm ${item.checked?"text-gray-400 line-through":"text-gray-900"}`}>{item.label}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        {att.status==="working"&&<div className="flex gap-2"><button onClick={()=>setModal("break")} className="flex-1 border-2 border-teal-500 text-teal-600 font-bold text-base rounded-xl py-4 bg-white">休憩</button><button onClick={()=>onNav("break-detail")} className={`flex-1 border-2 font-bold text-base rounded-xl py-4 flex items-center justify-center gap-1.5 ${att.breakConfirmed?"border-teal-400 bg-teal-50 text-teal-600":(att.breakLogs||[]).length>0?"border-orange-400 bg-orange-50 text-orange-600":"border-gray-300 bg-white text-gray-400"}`}>⏱ {att.breakConfirmed?"確定済":"休憩確認"}</button></div>}
+      </div>}
+    </div>
+    {modal==="clockin"&&<Modal title="出勤しますか？" message={`${today.full} の勤務を開始します`} confirmLabel="出勤する" onConfirm={doClockIn} onCancel={()=>setModal(null)}/>}
+    {modal==="break"&&<BreakStartModal onConfirm={loc=>doBreakStart(loc)} onCancel={()=>setModal(null)}/>}
+    {modal==="clockout"&&<Modal title="退勤しますか？" message={`拘束時間: ${formatDuration(bindMs)}`} confirmLabel="退勤する" onConfirm={doClockOut} onCancel={()=>setModal(null)}/>}
+  </div>);
+}
+
+function BreakDetailScreen({att,setAtt,onNav}){
+  const today=new Date();const dateStr=`${today.getFullYear()}/${pad(today.getMonth()+1)}/${pad(today.getDate())}`;
+  const fmt=d=>d?new Date(d).toLocaleTimeString("ja-JP",{hour:"2-digit",minute:"2-digit"}):"–:–";
+  const[logs,setLogs]=useState((att.breakLogs||[]).map(l=>({...l,editStart:fmt(l.start),editEnd:fmt(l.end)})));
+  const[showConfirm,setShowConfirm]=useState(false);const[showAdd,setShowAdd]=useState(false);const[showDel,setShowDel]=useState(null);
+  const calcTotal=ll=>ll.reduce((s,l)=>{const[sh,sm]=l.editStart.split(":").map(Number),[eh,em]=l.editEnd.split(":").map(Number);const m=Math.max(0,(eh*60+em)-(sh*60+sm));return s+(m>=10?m:0);},0);
+  const totalMin=calcTotal(logs),totalH=Math.floor(totalMin/60),totalM=totalMin%60;
+  const confirmBreaks=()=>{
+    const upd=logs.map(l=>{const[sh,sm]=l.editStart.split(":").map(Number),[eh,em]=l.editEnd.split(":").map(Number);const base=new Date(l.start||new Date()),s=new Date(base),e=new Date(base);s.setHours(sh,sm,0,0);e.setHours(eh,em,0,0);const min=Math.max(0,Math.floor((e-s)/60000));return{...l,start:s,end:e,minutes:min,valid:min>=10};});
+    const total=upd.filter(l=>l.valid).reduce((s,l)=>s+l.minutes,0);
+    setAtt({...att,breakLogs:upd,totalBreakMinutes:total,breakConfirmed:true});setShowConfirm(false);setTimeout(()=>onNav("home"),1200);
+  };
+  return(<div className="flex flex-col bg-gray-50 h-full">
+    <div className="bg-white border-b border-gray-200 px-4 py-2.5 flex items-center justify-between flex-shrink-0"><button onClick={()=>onNav("home")} className="text-teal-500 font-medium text-sm flex items-center gap-0.5">‹ 戻る</button><h1 className="text-base font-bold text-gray-800">休憩時間表示</h1><div className="w-12"/></div>
+    <div className="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-3">
+      <div className="bg-white rounded-xl border border-gray-200 px-4 py-3"><p className="text-sm text-gray-600">日付: <strong className="text-gray-900">{dateStr}</strong></p></div>
+      {att.breakConfirmed&&<div className="bg-teal-50 border-2 border-teal-300 rounded-xl px-4 py-3 text-center"><p className="text-teal-700 font-bold text-sm">✅ 確定済み</p></div>}
+      {logs.length===0?<div className="bg-white rounded-xl border border-gray-200 px-4 py-8 text-center text-gray-400 text-sm">休憩記録がありません</div>:(
+        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+          {logs.map((log,i)=>{const[sh,sm]=log.editStart.split(":").map(Number),[eh,em]=log.editEnd.split(":").map(Number);const min=Math.max(0,(eh*60+em)-(sh*60+sm));return(<div key={log.id||i} className={`flex items-center gap-3 px-4 py-3.5 ${i<logs.length-1?"border-b border-gray-100":""} ${min<10?"bg-gray-50 opacity-60":"bg-blue-50/40"}`}>{!att.breakConfirmed&&<button onClick={()=>setShowDel(i)} className="text-gray-400 text-lg">🗑</button>}<div className="flex-1"><p className="text-sm font-medium text-gray-800">{log.editStart} 〜 {log.editEnd}（{min}分）</p><p className="text-xs text-gray-500">{log.location||""}</p>{min<10&&<p className="text-[10px] text-gray-400">10分未満（カウントされません）</p>}</div></div>);})}
+        </div>
+      )}
+      {!att.breakConfirmed&&<div className="flex justify-end"><button onClick={()=>setShowAdd(true)} className="w-12 h-12 bg-red-500 rounded-full text-white text-2xl shadow-lg">+</button></div>}
+      <div className="bg-white rounded-xl border border-gray-200 px-4 py-4"><p className="text-sm text-gray-600">休憩時間合計：<span className="text-xl font-black text-gray-900 ml-2">{totalH>0?`${totalH}時間${totalM}分`:`${totalM}分`}</span></p>{!att.breakConfirmed&&<p className="text-xs text-gray-400 mt-1">確認・修正後、確定ボタンを押下して下さい</p>}</div>
+    </div>
+    {!att.breakConfirmed&&<div className="px-4 py-4 bg-white border-t border-gray-200 flex-shrink-0"><button onClick={()=>setShowConfirm(true)} className="w-full bg-red-500 text-white font-bold text-lg rounded-xl py-4">確定</button></div>}
+    {showDel!==null&&<div className="fixed inset-0 bg-black/50 flex items-end z-50" onClick={()=>setShowDel(null)}><div className="bg-white rounded-t-2xl w-full p-5 pb-6" style={{maxWidth:390,margin:"0 auto"}} onClick={e=>e.stopPropagation()}><h3 className="text-base font-bold text-gray-900 text-center mb-4">この休憩を削除しますか？</h3><div className="flex flex-col gap-2"><button onClick={()=>{setLogs(p=>p.filter((_,i)=>i!==showDel));setShowDel(null);}} className="w-full bg-red-500 text-white font-bold text-base rounded-xl py-3.5">削除する</button><button onClick={()=>setShowDel(null)} className="w-full bg-gray-100 text-gray-600 font-bold text-base rounded-xl py-3.5">キャンセル</button></div></div></div>}
+    {showAdd&&<div className="fixed inset-0 bg-black/50 flex items-end z-50" onClick={()=>setShowAdd(false)}><div className="bg-white rounded-t-2xl w-full p-5 pb-6" style={{maxWidth:390,margin:"0 auto"}} onClick={e=>e.stopPropagation()}><h3 className="text-base font-bold text-gray-900 mb-4">休憩を追加</h3><AddBreakForm onAdd={(s,e,l)=>{const[sh,sm]=s.split(":").map(Number),[eh,em]=e.split(":").map(Number);const min=Math.max(0,(eh*60+em)-(sh*60+sm));const base=new Date(),st=new Date(base),et=new Date(base);st.setHours(sh,sm,0,0);et.setHours(eh,em,0,0);setLogs(p=>[...p,{id:Date.now(),start:st,end:et,editStart:s,editEnd:e,minutes:min,location:l||"手動追加",valid:min>=10}]);setShowAdd(false);}} onCancel={()=>setShowAdd(false)}/></div></div>}
+    {showConfirm&&<div className="fixed inset-0 bg-black/50 flex items-end z-50" onClick={()=>setShowConfirm(false)}><div className="bg-white rounded-t-2xl w-full p-5 pb-6" style={{maxWidth:390,margin:"0 auto"}} onClick={e=>e.stopPropagation()}><h3 className="text-base font-bold text-gray-900 text-center mb-1">休憩時間を確定しますか？</h3><p className="text-sm text-gray-500 text-center mb-1">合計 {totalH>0?`${totalH}時間${totalM}分`:`${totalM}分`}</p><p className="text-xs text-gray-400 text-center mb-4">確定後は変更できません</p><div className="flex flex-col gap-2"><button onClick={confirmBreaks} className="w-full bg-red-500 text-white font-bold text-base rounded-xl py-3.5">確定する</button><button onClick={()=>setShowConfirm(false)} className="w-full bg-gray-100 text-gray-600 font-bold text-base rounded-xl py-3.5">キャンセル</button></div></div></div>}
+  </div>);
+}
+
+function AddBreakForm({onAdd,onCancel}){const[s,setS]=useState(""),e=useState("")[0],[ev,setEv]=useState(""),l=useState("")[0],[lv,setLv]=useState("");return(<div className="space-y-3"><div><label className="text-xs text-gray-500 block mb-1">開始時刻<span className="text-red-500">*</span></label><input type="time" value={s} onChange={x=>setS(x.target.value)} className="w-full border border-gray-300 rounded-xl px-3 py-2.5 text-sm"/></div><div><label className="text-xs text-gray-500 block mb-1">終了時刻<span className="text-red-500">*</span></label><input type="time" value={ev} onChange={x=>setEv(x.target.value)} className="w-full border border-gray-300 rounded-xl px-3 py-2.5 text-sm"/></div><div><label className="text-xs text-gray-500 block mb-1">休憩地点</label><input type="text" value={lv} onChange={x=>setLv(x.target.value)} placeholder="例: 会社、SA" className="w-full border border-gray-300 rounded-xl px-3 py-2.5 text-sm"/></div><div className="flex gap-2 mt-4"><button onClick={onCancel} className="flex-1 bg-gray-100 text-gray-600 font-bold text-sm rounded-xl py-3.5">キャンセル</button><button onClick={()=>s&&ev&&onAdd(s,ev,lv)} disabled={!s||!ev} className={`flex-1 font-bold text-sm rounded-xl py-3.5 ${s&&ev?"bg-teal-500 text-white":"bg-gray-200 text-gray-400"}`}>追加する</button></div></div>);}
+
+function DailyReportScreen({onNav,type="pre",att}){
+  const isPre=type==="pre";
+  const today=new Date();
+  const todayStr=`${today.getFullYear()}/${pad(today.getMonth()+1)}/${pad(today.getDate())}`;
+  const tabs=isPre?[["record","乗務記録"],["required","必須点検"],["optional","任意点検"]]:[["record","乗務記録"],["cargo","積荷"]];
+  const[tab,setTab]=useState("record");
+  const[form,setForm]=useState({vehicle:"",departureLoc:"",odometerOut:"",odometerIn:"",fuelAmount:"",fuelOdometer:"",returnLoc:"車庫",via:"",depH:"",depM:"",retH:"",retM:"",highway:null,forklift:null,accident:null,accidentNote:"",memo:"",weather:null});
+  const f=(k,v)=>setForm(p=>({...p,[k]:v}));
+  const allRequired=REQUIRED_CHECKS.flatMap(s=>s.items.map(item=>item));
+  const[reqVals,setReqVals]=useState(Object.fromEntries(allRequired.map((_,i)=>[i,null])));
+  const setReq=(i,v)=>setReqVals(p=>({...p,[i]:v}));
+  const[healthVals,setHealthVals]=useState(Object.fromEntries(HEALTH_CHECKS.map((_,i)=>[i,false])));
+  const toggleHealth=i=>setHealthVals(p=>({...p,[i]:!p[i]}));
+  const[prevAbnormal,setPrevAbnormal]=useState(null);
+  const[prevOpen,setPrevOpen]=useState(false);
+  const[prevNote,setPrevNote]=useState("");
+  const allOptional=OPTIONAL_CHECKS.flatMap(s=>s.items.map(item=>item));
+  const[optVals,setOptVals]=useState(Object.fromEntries(allOptional.map((_,i)=>[i,null])));
+  const setOpt=(i,v)=>setOptVals(p=>({...p,[i]:v}));
+  const[showOptClear,setShowOptClear]=useState(false);
+  const emptyCargo={status:null,type:"",weight:"",ratio:""};
+  const[cargo,setCargo]=useState([{...emptyCargo},{...emptyCargo}]);
+  const setCg=(i,k,v)=>setCargo(p=>p.map((c,j)=>j===i?{...c,[k]:v}:c));
+  const[showCargoClear,setShowCargoClear]=useState(false);
+  const[draftSaved,setDraftSaved]=useState(false);const[draftMsg,setDraftMsg]=useState(false);
+  const[submitted,setSubmitted]=useState(false);
+  if(submitted)return(<div className="flex-1 flex flex-col items-center justify-center gap-3 bg-gray-50"><p className="text-5xl">📋</p><p className="text-lg font-black text-teal-600">{isPre?"乗務前日報":"乗務後日報"}を提出しました</p></div>);
+  return(<div className="flex flex-col bg-gray-50 h-full">
+    <div className="bg-white border-b border-gray-200 flex-shrink-0"><div className="flex">{tabs.map(([key,label])=>(<button key={key} onClick={()=>setTab(key)} className={`flex-1 py-2.5 text-xs font-bold border-b-2 ${tab===key?"border-teal-500 text-teal-600":"border-transparent text-gray-400"}`}>{label}</button>))}</div></div>
+    <div className="flex-1 overflow-y-auto">
+      {tab==="record"&&<div className="px-3 py-3 space-y-3">
+        <p className="text-right text-xs text-red-500">（*）：必須項目</p>
+        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+          <div className="px-3 py-2 border-b border-gray-100 bg-gray-50"><p className="text-xs font-bold text-gray-600">乗務記録</p></div>
+          <div className="px-3 py-2 border-b border-gray-100"><p className="text-xs text-gray-400">日報入力日</p><p className="text-sm text-gray-800">{todayStr}</p></div>
+          {isPre?(<>
+            <div className="px-3 py-2 border-b border-gray-100"><p className="text-xs text-gray-400">■車両番号<span className="text-red-500">*</span></p><input value={form.vehicle} onChange={e=>f("vehicle",e.target.value)} className="w-full border border-gray-300 rounded px-2 py-1 text-sm mt-1"/></div>
+            <div className="px-3 py-2 border-b border-gray-100"><p className="text-xs text-gray-400">■出庫地<span className="text-red-500">*</span></p><input value={form.departureLoc} onChange={e=>f("departureLoc",e.target.value)} className="w-full border border-gray-200 rounded px-2 py-1 text-sm mt-1"/></div>
+            <div className="px-3 py-2 border-b border-gray-100"><p className="text-xs text-gray-400">■出庫時メーター<span className="text-red-500">*</span></p><div className="flex items-center gap-2 mt-1"><input value={form.odometerOut} onChange={e=>f("odometerOut",e.target.value)} className="flex-1 border border-gray-200 rounded px-2 py-1 text-sm text-right"/><span className="text-xs text-gray-500">km</span></div></div>
+            <div className="px-3 py-2"><p className="text-xs text-gray-400">■天気<span className="text-red-500">*</span></p><div className="flex gap-2 mt-2">{[{key:"sun",label:"晴",emoji:"☀️"},{key:"cloud",label:"曇",emoji:"☁️"},{key:"rain",label:"雨",emoji:"🌧"},{key:"snow",label:"雪",emoji:"❄️"}].map(w=>(<button key={w.key} onClick={()=>f("weather",w.key)} className={`flex flex-col items-center justify-center w-14 h-12 rounded-lg border-2 gap-0.5 ${form.weather===w.key?"border-teal-500 bg-teal-50 text-teal-600":"border-gray-200 bg-gray-50 text-gray-400"}`}><span className="text-lg">{w.emoji}</span><span className="text-[9px] font-medium">{w.label}</span></button>))}</div></div>
+          </>):(<>
+            <div className="px-3 py-2 border-b border-gray-100"><p className="text-xs text-gray-400">出庫時間<span className="text-red-500">*</span></p><div className="flex items-center gap-1 mt-1"><input value={form.depH} onChange={e=>f("depH",e.target.value)} placeholder="09" maxLength={2} className="w-14 border border-gray-300 rounded px-2 py-1 text-sm text-center"/><span className="text-gray-400">:</span><input value={form.depM} onChange={e=>f("depM",e.target.value)} placeholder="00" maxLength={2} className="w-14 border border-gray-300 rounded px-2 py-1 text-sm text-center"/></div></div>
+            <div className="px-3 py-2 border-b border-gray-100"><p className="text-xs text-gray-400">帰庫時間<span className="text-red-500">*</span></p><div className="flex items-center gap-1 mt-1"><input value={form.retH} onChange={e=>f("retH",e.target.value)} placeholder="17" maxLength={2} className="w-14 border border-gray-300 rounded px-2 py-1 text-sm text-center"/><span className="text-gray-400">:</span><input value={form.retM} onChange={e=>f("retM",e.target.value)} placeholder="00" maxLength={2} className="w-14 border border-gray-300 rounded px-2 py-1 text-sm text-center"/></div></div>
+            <div className="px-3 py-2 border-b border-gray-100"><p className="text-xs text-gray-400">帰庫地<span className="text-red-500">*</span></p><input value={form.returnLoc} onChange={e=>f("returnLoc",e.target.value)} className="w-full border border-gray-200 rounded px-2 py-1 text-sm mt-1"/></div>
+            <div className="px-3 py-2 border-b border-gray-100"><p className="text-xs text-gray-400">経過地<span className="text-red-500">*</span></p><input value={form.via} onChange={e=>f("via",e.target.value)} className="w-full border border-gray-200 rounded px-2 py-1 text-sm mt-1"/></div>
+            <div className="px-3 py-2 border-b border-gray-100"><p className="text-xs font-bold text-gray-600">■給油</p><div className="flex items-center gap-2 mt-1"><input value={form.fuelAmount} onChange={e=>f("fuelAmount",e.target.value)} placeholder="給油量" className="flex-1 border border-gray-200 rounded px-2 py-1 text-sm text-right"/><span className="text-xs text-gray-500">L</span><input value={form.fuelOdometer} onChange={e=>f("fuelOdometer",e.target.value)} placeholder="給油時メーター" className="flex-1 border border-gray-200 rounded px-2 py-1 text-sm text-right"/><span className="text-xs text-gray-500">km</span></div></div>
+            <div className="px-3 py-2 border-b border-gray-100"><p className="text-xs font-bold text-gray-600">■走行距離</p><div className="flex items-center justify-between mt-1"><span className="text-xs text-gray-400">出庫メーター<span className="text-red-500">*</span></span><div className="flex items-center gap-1"><input value={form.odometerOut} onChange={e=>f("odometerOut",e.target.value)} className="w-24 border border-gray-200 rounded px-2 py-1 text-sm text-right"/><span className="text-xs text-gray-500">km</span></div></div><div className="flex items-center justify-between mt-1.5"><span className="text-xs text-gray-400">帰庫メーター<span className="text-red-500">*</span></span><div className="flex items-center gap-1"><input value={form.odometerIn} onChange={e=>f("odometerIn",e.target.value)} className="w-24 border border-gray-200 rounded px-2 py-1 text-sm text-right"/><span className="text-xs text-gray-500">km</span></div></div></div>
+            <div className="px-3 py-2 border-b border-gray-100">
+              <p className="text-xs font-bold text-gray-600">■道路、運行の状況</p>
+              <p className="text-xs text-gray-400 mt-1.5">高速道路の使用<span className="text-red-500">*</span></p><div className="grid grid-cols-2 gap-1.5 mt-1"><button onClick={()=>f("highway","yes")} className={`py-2 rounded text-sm ${form.highway==="yes"?"bg-gray-400 text-white":"bg-gray-100 text-gray-500"}`}>有り</button><button onClick={()=>f("highway","no")} className={`py-2 rounded text-sm ${form.highway==="no"?"bg-gray-400 text-white":"bg-gray-100 text-gray-500"}`}>無し</button></div>
+              <p className="text-xs text-gray-400 mt-2">フォークリフトの使用<span className="text-red-500">*</span></p><div className="grid grid-cols-2 gap-1.5 mt-1"><button onClick={()=>f("forklift","yes")} className={`py-2 rounded text-sm ${form.forklift==="yes"?"bg-gray-400 text-white":"bg-gray-100 text-gray-500"}`}>有り</button><button onClick={()=>f("forklift","no")} className={`py-2 rounded text-sm ${form.forklift==="no"?"bg-gray-400 text-white":"bg-gray-100 text-gray-500"}`}>無し</button></div>
+              <p className="text-xs text-gray-400 mt-2">異常<span className="text-red-500">*</span></p><div className="grid grid-cols-2 gap-1.5 mt-1"><button onClick={()=>f("accident","yes")} className={`py-2 rounded text-sm ${form.accident==="yes"?"bg-gray-400 text-white":"bg-gray-100 text-gray-500"}`}>有り</button><button onClick={()=>f("accident","no")} className={`py-2 rounded text-sm ${form.accident==="no"?"bg-gray-400 text-white":"bg-gray-100 text-gray-500"}`}>無し</button></div>
+              {form.accident==="yes"&&<textarea value={form.accidentNote} onChange={e=>f("accidentNote",e.target.value)} rows={2} placeholder="遅延・事故の概要及び、原因について記入" className="w-full border border-gray-200 rounded px-2 py-1.5 text-xs mt-2 resize-none"/>}
+            </div>
+            <div className="px-3 py-2"><p className="text-xs font-bold text-gray-600">■記事・メモ</p><textarea value={form.memo} onChange={e=>f("memo",e.target.value)} rows={3} className="w-full border border-gray-200 rounded px-2 py-1.5 text-sm mt-1 resize-none"/></div>
+          </>)}
+        </div>
+      </div>}
+
+      {tab==="required"&&<div className="px-3 py-3 space-y-2">
+        <p className="text-right text-xs text-red-500">（*）：必須項目</p>
+        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+          <div className="px-3 py-2 bg-gray-50 border-b border-gray-100"><p className="text-xs font-bold text-gray-700">■飲酒・健康状態確認</p></div>
+          <div className="px-3 divide-y divide-gray-100">
+            {HEALTH_CHECKS.map((item,i)=>(<div key={item} className="py-2.5"><p className="text-xs text-gray-700 mb-1.5">{item}<span className="text-red-500 ml-0.5">*</span></p><button onClick={()=>toggleHealth(i)} className={`w-full py-2 rounded-lg text-sm font-medium ${healthVals[i]?"bg-red-400 text-white":"bg-gray-100 text-gray-400"}`}>良</button></div>))}
+          </div>
+        </div>
+        {(()=>{let idx=0;return REQUIRED_CHECKS.map(section=>(<div key={section.section} className="bg-white rounded-xl border border-gray-200 overflow-hidden"><div className="px-3 py-2 bg-gray-50 border-b border-gray-100"><p className="text-xs font-bold text-gray-700">■{section.section}</p></div><div className="px-3 divide-y divide-gray-100">{section.items.map(item=>{const i=idx++;return(<CheckItem key={item} label={item} required value={reqVals[i]} onChange={v=>setReq(i,v)}/>);})}</div></div>));})()}
+      </div>}
+
+      {tab==="optional"&&<div className="px-3 py-3 space-y-2">
+        <div className="flex justify-between items-center"><p className="text-xs text-gray-500">入力した項目をリセットできます</p><button onClick={()=>setShowOptClear(true)} className="text-xs text-red-500 border border-red-300 rounded px-3 py-1">クリア</button></div>
+        {(()=>{let idx=0;return OPTIONAL_CHECKS.map(section=>(<div key={section.section} className="bg-white rounded-xl border border-gray-200 overflow-hidden"><div className="px-3 py-2 bg-gray-50 border-b border-gray-100"><p className="text-xs font-bold text-gray-700">■{section.section}</p></div><div className="px-3 divide-y divide-gray-100">{section.items.map(item=>{const i=idx++;return(<CheckItem key={item} label={item} value={optVals[i]} onChange={v=>setOpt(i,v)}/>);})}</div></div>));})()}
+        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+          <button onClick={()=>setPrevOpen(o=>!o)} className="w-full flex items-center justify-between px-3 py-2.5 bg-gray-50 border-b border-gray-100"><p className="text-xs font-bold text-gray-700">■前回の運行において異状が認められた箇所</p><span className="text-gray-400 text-sm">{prevOpen?"▲":"▼"}</span></button>
+          {prevOpen&&<div className="px-3 py-2.5"><p className="text-xs text-gray-700 mb-1.5">当該箇所に異状がないこと</p><div className="grid grid-cols-2 gap-1.5 mb-2"><button onClick={()=>setPrevAbnormal("repair")} className={`py-2 rounded-lg text-sm font-medium ${prevAbnormal==="repair"?"bg-gray-400 text-white":"bg-gray-100 text-gray-500"}`}>修理対応</button><button onClick={()=>setPrevAbnormal("ok")} className={`py-2 rounded-lg text-sm font-medium ${prevAbnormal==="ok"?"bg-red-400 text-white":"bg-gray-100 text-gray-400"}`}>良</button></div>{prevAbnormal==="repair"&&<textarea value={prevNote} onChange={e=>setPrevNote(e.target.value)} rows={2} placeholder="異状箇所の詳細を入力" className="w-full border border-gray-200 rounded px-2 py-1.5 text-xs resize-none"/>}</div>}
+        </div>
+        {showOptClear&&<div className="fixed inset-0 bg-black/50 flex items-end z-50" onClick={()=>setShowOptClear(false)}><div className="bg-white rounded-t-2xl w-full p-5 pb-6" style={{maxWidth:390,margin:"0 auto"}} onClick={e=>e.stopPropagation()}><h3 className="text-base font-bold text-gray-900 text-center mb-1">任意点検をクリアしますか？</h3><p className="text-xs text-gray-500 text-center mb-4">入力したすべての項目がリセットされます</p><div className="flex flex-col gap-2"><button onClick={()=>{setOptVals(Object.fromEntries(allOptional.map((_,i)=>[i,null])));setPrevAbnormal(null);setPrevNote("");setShowOptClear(false);}} className="w-full bg-red-500 text-white font-bold text-base rounded-xl py-3.5">クリアする</button><button onClick={()=>setShowOptClear(false)} className="w-full bg-gray-100 text-gray-600 font-bold text-base rounded-xl py-3.5">キャンセル</button></div></div></div>}
+      </div>}
+
+      {tab==="cargo"&&<div className="px-3 py-3 space-y-3">
+        {cargo.map((c,i)=>(<div key={i} className="bg-white rounded-xl border border-gray-200 overflow-hidden"><div className="px-3 py-2 bg-gray-50 border-b border-gray-100 flex items-center justify-between"><p className="text-xs font-bold text-gray-700">積荷{i+1}</p>{i>0&&<button onClick={()=>setShowCargoClear(true)} className="text-xs text-red-500 border border-red-300 rounded px-2 py-0.5">クリア</button>}</div><div className="px-3 py-2 divide-y divide-gray-100"><div className="pb-2"><p className="text-xs text-gray-500 mb-1">積載状況{i+1}<span className="text-red-500">*</span></p><div className="grid grid-cols-2 gap-1.5"><button onClick={()=>setCg(i,"status","no")} className={`py-2 rounded text-sm ${c.status==="no"?"bg-gray-400 text-white":"bg-gray-100 text-gray-500"}`}>否</button><button onClick={()=>setCg(i,"status","ok")} className={`py-2 rounded text-sm ${c.status==="ok"?"bg-red-400 text-white":"bg-gray-100 text-gray-400"}`}>良</button></div></div><div className="py-2"><input value={c.type} onChange={e=>setCg(i,"type",e.target.value)} placeholder="積荷の種類" className="w-full border border-gray-200 rounded px-2 py-1.5 text-sm"/></div><div className="pt-2 flex items-center gap-2"><input value={c.weight} onChange={e=>setCg(i,"weight",e.target.value)} placeholder={`積載重量${i+1}`} className="flex-1 border border-gray-200 rounded px-2 py-1.5 text-sm text-right"/><span className="text-xs text-gray-500">t</span><input value={c.ratio} onChange={e=>setCg(i,"ratio",e.target.value)} placeholder={`積載割合${i+1}`} className="flex-1 border border-gray-200 rounded px-2 py-1.5 text-sm text-right"/><span className="text-xs text-gray-500">%</span></div></div></div>))}
+        {showCargoClear&&<div className="fixed inset-0 bg-black/50 flex items-end z-50" onClick={()=>setShowCargoClear(false)}><div className="bg-white rounded-t-2xl w-full p-5 pb-6" style={{maxWidth:390,margin:"0 auto"}} onClick={e=>e.stopPropagation()}><h3 className="text-base font-bold text-gray-900 text-center mb-4">積荷2をクリアしますか？</h3><div className="flex flex-col gap-2"><button onClick={()=>{setCargo(p=>[p[0],{...emptyCargo}]);setShowCargoClear(false);}} className="w-full bg-red-500 text-white font-bold text-base rounded-xl py-3.5">クリアする</button><button onClick={()=>setShowCargoClear(false)} className="w-full bg-gray-100 text-gray-600 font-bold text-base rounded-xl py-3.5">キャンセル</button></div></div></div>}
+      </div>}
+      <div className="h-4"/>
+    </div>
+    {draftMsg&&<div className="fixed top-16 left-1/2 -translate-x-1/2 bg-gray-800 text-white text-sm font-medium px-5 py-2.5 rounded-full shadow-lg z-50">✅ 下書きを保存しました</div>}
+    <div className="px-3 py-3 bg-white border-t border-gray-200 flex gap-2 flex-shrink-0">
+      <button onClick={()=>{setDraftSaved(true);setDraftMsg(true);setTimeout(()=>setDraftMsg(false),2500);}} className={`flex-1 border font-semibold text-sm rounded-xl py-3 ${draftSaved?"border-teal-400 text-teal-600 bg-teal-50":"border-gray-300 text-gray-600"}`}>{draftSaved?"✓ 下書き保存済":"下書き保存"}</button>
+      {!isPre&&!att?.breakConfirmed?(<button onClick={()=>onNav("break-detail")} className="flex-1 bg-orange-400 text-white font-semibold text-sm rounded-xl py-3">休憩を確定してください</button>):(<button onClick={()=>setSubmitted(true)} className="flex-1 bg-teal-500 text-white font-semibold text-sm rounded-xl py-3">提出する</button>)}
+    </div>
+  </div>);
+}
+
+function HistoryScreen({att}){
+  const today=new Date();const todayY=today.getFullYear(),todayM=today.getMonth()+1,todayD=today.getDate();
+  const DOW=["日","月","火","水","木","金","土"];
+  const[year,setYear]=useState(todayY),[month,setMonth]=useState(todayM);
+  const now2=new Date();
+  const breakMin=att.status==="on-break"&&att.breakStartAt?Math.floor((now2-new Date(att.breakStartAt))/60000):0;
+  const todayBreak=att.totalBreakMinutes+breakMin;
+  const todayBindMs=att.clockInAt?(att.clockOutAt?new Date(att.clockOutAt)-new Date(att.clockInAt):now2-new Date(att.clockInAt)):0;
+  const todayWork=Math.max(0,Math.floor(todayBindMs/60000)-todayBreak);
+  const fmt=d=>d?`${pad(new Date(d).getHours())}:${pad(new Date(d).getMinutes())}`:"–:–";
+  const base=[{d:1,ci:"08:45",co:"17:30",bk:60,wk:465},{d:4,ci:"09:00",co:"18:00",bk:60,wk:480},{d:5,ci:"08:30",co:"17:00",bk:60,wk:450},{d:6,ci:"09:00",co:"19:15",bk:60,wk:555},{d:7,ci:"08:45",co:"17:45",bk:60,wk:480},{d:8,ci:"09:00",co:"17:00",bk:60,wk:420},{d:11,ci:"09:00",co:"17:00",bk:60,wk:420},{d:12,ci:"08:00",co:"17:30",bk:45,wk:525},{d:13,ci:"09:00",co:"18:00",bk:60,wk:480},{d:14,ci:"09:00",co:"17:00",bk:60,wk:420},{d:15,ci:"08:45",co:"18:30",bk:60,wk:525},{d:18,ci:"09:00",co:"17:00",bk:60,wk:420},{d:19,ci:"09:00",co:"18:00",bk:60,wk:480},{d:20,ci:"08:30",co:"17:30",bk:60,wk:480},{d:21,ci:"09:00",co:"17:00",bk:60,wk:420},{d:22,ci:"09:15",co:"18:15",bk:60,wk:480},{d:25,ci:"09:00",co:"17:00",bk:60,wk:420},{d:26,ci:"08:45",co:"18:00",bk:60,wk:495},{d:27,ci:"09:00",co:"17:00",bk:60,wk:420},{d:28,ci:"09:00",co:"18:30",bk:60,wk:510},{d:29,ci:"08:30",co:"17:00",bk:60,wk:450}];
+  const daysInMonth=new Date(year,month,0).getDate();const isCurrent=year===todayY&&month===todayM;const lastDay=isCurrent?todayD-1:daysInMonth;
+  const records=[...base.filter(r=>r.d<=lastDay&&r.d<=daysInMonth).map(r=>{const date=new Date(year,month-1,r.d);return{...r,dow:DOW[date.getDay()],isWeekend:date.getDay()===0||date.getDay()===6,isToday:false};}),
+    ...(isCurrent&&att.status!=="pre-work"&&att.clockInAt?[{d:todayD,dow:DOW[today.getDay()],isWeekend:today.getDay()===0||today.getDay()===6,isToday:true,isLive:att.status!=="completed",ci:fmt(att.clockInAt),co:att.clockOutAt?fmt(att.clockOutAt):null,bk:todayBreak,wk:todayWork,status:att.status}]:[])
+  ].sort((a,b)=>b.d-a.d);
+  const worked=records.filter(r=>r.ci);const totalMin=worked.reduce((s,r)=>s+r.wk,0);const totalH=Math.floor(totalMin/60),totalM2=totalMin%60;
+  const prevM=()=>{if(month===1){setYear(y=>y-1);setMonth(12);}else setMonth(m=>m-1);};
+  const nextM=()=>{if(year===todayY&&month===todayM)return;if(month===12){setYear(y=>y+1);setMonth(1);}else setMonth(m=>m+1);};
+  const isLatest=year===todayY&&month===todayM;
+  return(<div className="flex flex-col bg-gray-50 h-full">
+    <div className="bg-white border-b border-gray-200 px-4 py-2.5 flex items-center justify-between flex-shrink-0"><button onClick={prevM} className="text-teal-500 text-sm">‹ {month===1?`${year-1}/12`:`${month-1}月`}</button><span className="text-base font-bold text-gray-900">{year}年{month}月</span><button onClick={nextM} className={`text-sm ${isLatest?"text-gray-300":"text-teal-500"}`}>{month===12?`${year+1}/1`:`${month+1}月`} ›</button></div>
+    <div className="bg-white border-b border-gray-200 flex-shrink-0"><div className="grid grid-cols-3 border-b border-gray-100 px-4 py-1.5"><span className="text-xs text-gray-400">出勤日数</span><span className="text-xs text-gray-400 text-center">実働時間</span><span className="text-xs text-gray-400 text-right">給与（概算）</span></div><div className="grid grid-cols-3 px-4 py-2"><span className="text-base font-bold text-gray-900">{worked.length}日</span><span className="text-base font-bold text-gray-900 text-center">{totalH}h{totalM2>0?`${totalM2}m`:""}</span><span className="text-base font-bold text-gray-900 text-right">¥{(totalH*1150).toLocaleString()}</span></div></div>
+    <div className="flex-1 overflow-y-auto bg-white">
+      {records.map((r,i)=>(<div key={r.d} className={`px-4 py-3 ${i<records.length-1?"border-b border-gray-100":""} ${r.isToday&&r.isLive?"bg-teal-50/60":r.isWeekend&&!r.ci?"bg-gray-50":""}`}><div className="grid grid-cols-3 items-start"><div><div className="flex items-center gap-1"><span className={`text-sm font-bold ${r.isWeekend?"text-red-500":"text-gray-900"}`}>{r.d}</span><span className={`text-xs ${r.isWeekend?"text-red-400":"text-gray-400"}`}>{r.dow}</span>{r.isToday&&<span className={`text-[9px] font-bold px-1 rounded ${r.status==="working"?"bg-teal-500 text-white":r.status==="on-break"?"bg-amber-400 text-white":"bg-teal-100 text-teal-600"}`}>{r.status==="working"?"中":r.status==="on-break"?"休":"今"}</span>}</div></div><div className="text-center">{r.ci?<><span className="text-xs font-medium text-gray-800 block">{r.ci}〜{r.co||"勤務中"}</span><span className="text-xs text-gray-400">休憩{r.bk>=60?`${Math.floor(r.bk/60)}h${r.bk%60}m`:`${r.bk}分`}</span></>:<span className="text-xs text-gray-300">—</span>}</div><div className="text-right">{r.wk>0?<span className="text-xs font-semibold text-gray-800">{workLabel(r.wk)}</span>:<span className="text-xs text-gray-300">—</span>}</div></div></div>))}
+    </div>
+  </div>);
+}
+
+function AlertsScreen({alerts,setAlerts,markRead}){
+  const markFn=id=>{if(markRead)markRead(id);setAlerts(alerts.map(a=>a.id===id?{...a,isRead:true}:a));};
+  const cfgs={info:{badge:"bg-blue-100 text-blue-700",border:"border-blue-200",icon:"ℹ️",label:"情報"},warning:{badge:"bg-orange-100 text-orange-700",border:"border-orange-300",icon:"⚠️",label:"警告"},danger:{badge:"bg-red-100 text-red-700",border:"border-red-300",icon:"🚨",label:"重大"},violation:{badge:"bg-red-600 text-white",border:"border-red-500",icon:"🚫",label:"違反"}};
+  const unread=alerts.filter(a=>!a.isRead),read=alerts.filter(a=>a.isRead);
+  return(<div className="flex-1 overflow-y-auto bg-gray-50 pb-4">
+    {unread.length>0&&<><div className="px-4 pt-3 pb-1"><span className="text-xs font-semibold text-gray-500">未読 {unread.length}件</span></div><div className="mx-4 flex flex-col gap-2.5">{unread.map(alert=>{const c=cfgs[alert.severity];return(<div key={alert.id} className={`bg-white rounded-xl border-2 ${c.border} overflow-hidden`}><div className="px-4 pt-3 pb-2.5"><div className="flex items-center gap-2 mb-1.5"><span>{c.icon}</span><span className={`text-xs font-bold px-2 py-0.5 rounded-full ${c.badge}`}>{c.label}</span></div><p className="font-bold text-gray-900 text-sm">{alert.title}</p><p className="text-gray-500 text-xs mt-0.5">{alert.message}</p></div><button onClick={()=>markFn(alert.id)} className="w-full bg-gray-50 border-t border-gray-200 text-teal-500 font-semibold text-xs py-2.5">確認済みにする</button></div>);})}</div></>}
+    {read.length>0&&<><div className="px-4 pt-3 pb-1"><span className="text-xs font-semibold text-gray-500">確認済み {read.length}件</span></div><div className="mx-4 bg-white rounded-xl border border-gray-200 overflow-hidden">{read.map((alert,i)=>(<div key={alert.id} className={`px-4 py-2.5 opacity-50 ${i<read.length-1?"border-b border-gray-100":""}`}><p className="font-semibold text-gray-700 text-sm">{alert.title}</p><p className="text-gray-400 text-xs mt-0.5">{alert.message}</p></div>))}</div></>}
+    {alerts.length===0&&<div className="flex flex-col items-center justify-center py-16"><p className="text-4xl mb-3">🎉</p><p className="text-sm font-bold text-gray-500">アラートはありません</p></div>}
+  </div>);
+}
+
+function ExportScreen({att}){
+  const today=new Date();
+  const[exportYear,setExportYear]=useState(today.getFullYear());const[exportMonth,setExportMonth]=useState(today.getMonth()+1);
+  const[exporting,setExporting]=useState(null);const[done,setDone]=useState(null);
+  const DOW=["日","月","火","水","木","金","土"];
+  const buildData=()=>{
+    const todayY=today.getFullYear(),todayM=today.getMonth()+1,todayD=today.getDate();
+    const daysInMonth=new Date(exportYear,exportMonth,0).getDate();const isCurrent=exportYear===todayY&&exportMonth===todayM;
+    const base=[{d:1,ci:"08:45",co:"17:30",bk:60,wk:465},{d:4,ci:"09:00",co:"18:00",bk:60,wk:480},{d:5,ci:"08:30",co:"17:00",bk:60,wk:450},{d:6,ci:"09:00",co:"19:15",bk:60,wk:555},{d:11,ci:"09:00",co:"17:00",bk:60,wk:420},{d:12,ci:"08:00",co:"17:30",bk:45,wk:525},{d:18,ci:"09:00",co:"17:00",bk:60,wk:420},{d:25,ci:"09:00",co:"17:00",bk:60,wk:420}].filter(r=>r.d<=daysInMonth&&(!isCurrent||r.d<todayD));
+    if(isCurrent&&att.clockInAt){const ci=att.clockInAt,co=att.clockOutAt;const fmt2=d=>`${pad(new Date(d).getHours())}:${pad(new Date(d).getMinutes())}`;const bMs=co?new Date(co)-new Date(ci):Date.now()-new Date(ci);const wk=Math.max(0,Math.floor(bMs/60000)-att.totalBreakMinutes);base.push({d:todayD,ci:fmt2(ci),co:co?fmt2(co):"勤務中",bk:att.totalBreakMinutes,wk});}
+    return base.sort((a,b)=>a.d-b.d).map(r=>{const date=new Date(exportYear,exportMonth-1,r.d);const wkH=Math.floor(r.wk/60),wkM=r.wk%60;return{日付:`${exportYear}/${pad(exportMonth)}/${pad(r.d)}`,曜日:DOW[date.getDay()],出勤時刻:r.ci||"",退勤時刻:r.co||"",休憩時間_分:r.bk,実働時間:r.wk>0?`${wkH}:${pad(wkM)}`:"",実働時間_分:r.wk,備考:r.co==="勤務中"?"勤務中":""};});
+  };
+  const exportCSV=type=>{
+    setExporting(type);setDone(null);
+    try{
+      const attData=buildData();const worked=attData.filter(r=>r.出勤時刻);const totalMin=worked.reduce((s,r)=>s+r.実働時間_分,0);
+      const toCSV=(h,rows)=>[h,...rows].map(row=>row.map(v=>'"'+String(v||"").replace(/"/g,'""')+'"').join(",")).join("\n");
+      const attH=["日付","曜日","出勤時刻","退勤時刻","休憩時間(分)","実働時間","備考"];const attR=attData.map(r=>[r.日付,r.曜日,r.出勤時刻,r.退勤時刻,r.休憩時間_分,r.実働時間,r.備考]);
+      const brkH=["番号","休憩開始","休憩終了","休憩時間(分)","休憩地点","有効"];const brkR=(att.breakLogs||[]).map((log,i)=>[i+1,new Date(log.start).toLocaleTimeString("ja-JP",{hour:"2-digit",minute:"2-digit"}),new Date(log.end).toLocaleTimeString("ja-JP",{hour:"2-digit",minute:"2-digit"}),log.minutes,log.location||"",log.valid?"有効":"無効（10分未満）"]);
+      const BOM="\uFEFF";let csv=BOM;
+      if(type==="all"){csv+="勤怠記録\n"+toCSV(attH,attR);if(brkR.length>0)csv+="\n\n休憩記録\n"+toCSV(brkH,brkR);}
+      else if(type==="attendance")csv+="勤怠記録\n"+toCSV(attH,attR);
+      else if(type==="break")csv+="休憩記録\n"+toCSV(brkH,brkR);
+      const blob=new Blob([csv],{type:"text/csv;charset=utf-8;"});const url=URL.createObjectURL(blob);window.open(url,"_blank");setTimeout(()=>URL.revokeObjectURL(url),1000);setDone(type);
+    }catch(e){alert("出力に失敗しました: "+e.message);}finally{setExporting(null);}
+  };
+  const attData=buildData();const worked=attData.filter(r=>r.出勤時刻);const totalMin=worked.reduce((s,r)=>s+r.実働時間_分,0);
+  return(<div className="flex flex-col bg-gray-50 h-full">
+    <div className="bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between flex-shrink-0"><button onClick={()=>{if(exportMonth===1){setExportYear(y=>y-1);setExportMonth(12);}else setExportMonth(m=>m-1);}} className="text-teal-500 text-sm">‹ {exportMonth===1?`${exportYear-1}/12`:`${exportMonth-1}月`}</button><span className="text-base font-bold text-gray-900">{exportYear}年{exportMonth}月のデータ</span><button onClick={()=>{if(exportMonth===12){setExportYear(y=>y+1);setExportMonth(1);}else setExportMonth(m=>m+1);}} className="text-teal-500 text-sm">{exportMonth===12?`${exportYear+1}/1`:`${exportMonth+1}月`} ›</button></div>
+    <div className="flex-1 overflow-y-auto">
+      <div className="px-4 pt-4 pb-2"><p className="text-xs font-semibold text-gray-500 mb-2">CSVダウンロード</p><button onClick={()=>exportCSV("all")} disabled={!!exporting} className={`w-full rounded-xl py-4 flex items-center justify-center gap-3 font-bold text-base shadow-sm text-white ${exporting==="all"?"bg-teal-300":"bg-teal-500"}`}>📊 全データをCSVダウンロード</button>{done==="all"&&<p className="text-xs text-teal-600 text-center mt-2 font-medium">✅ CSVをダウンロードしました！</p>}</div>
+      <div className="px-4 pb-2"><div className="bg-white rounded-xl border border-gray-200 overflow-hidden">{[{key:"attendance",label:"勤怠記録のみ",sub:"出退勤・実働時間・休憩時間",icon:"🕐"},{key:"break",label:"休憩記録のみ",sub:"休憩地点・時間・有効/無効",icon:"🅿️"}].map((item,i,arr)=>(<div key={item.key} className={`flex items-center justify-between px-4 py-3.5 ${i<arr.length-1?"border-b border-gray-100":""}`}><div><p className="text-sm font-semibold text-gray-800">{item.icon} {item.label}</p><p className="text-xs text-gray-400 mt-0.5">{item.sub}</p></div><button onClick={()=>exportCSV(item.key)} disabled={!!exporting} className={`px-4 py-2 rounded-lg text-sm font-bold border ${exporting===item.key?"bg-teal-100 text-teal-400 border-teal-200":"bg-teal-50 text-teal-600 border-teal-300"}`}>{exporting===item.key?"⏳":"出力"}</button></div>))}</div>{done&&done!=="all"&&<p className="text-xs text-teal-600 text-center mt-2 font-medium">✅ ダウンロードしました！</p>}</div>
+      <div className="px-4 pb-4"><p className="text-xs font-semibold text-gray-500 mb-2">今月のデータプレビュー</p><div className="bg-white rounded-xl border border-gray-200 overflow-hidden">{[{label:"出勤日数",value:worked.length+"日"},{label:"実働時間合計",value:Math.floor(totalMin/60)+"時間"+(totalMin%60)+"分"},{label:"休憩時間合計",value:worked.reduce((s,r)=>s+r.休憩時間_分,0)+"分"},{label:"給与（概算）",value:"¥"+(Math.floor(totalMin/60)*1150).toLocaleString()},{label:"今日の休憩回数",value:(att.breakLogs||[]).length+"回"}].map((item,i,arr)=>(<div key={item.label} className={`flex items-center justify-between px-4 py-3 ${i<arr.length-1?"border-b border-gray-100":""}`}><span className="text-sm text-gray-600">{item.label}</span><span className="text-sm font-bold text-gray-900">{item.value}</span></div>))}</div></div>
+    </div>
+  </div>);
+}
+
+function App(){
+  const[screen,setScreen]=useState("home");
+  const[att,setAttRaw]=useState(()=>{const saved=revive(loadLS(LS_KEY));if(!saved)return DEFAULT;if(saved.clockInAt){const ci=new Date(saved.clockInAt);const d=`${ci.getFullYear()}-${pad(ci.getMonth()+1)}-${pad(ci.getDate())}`;if(d!==todayStr()){localStorage.removeItem(LS_KEY);return DEFAULT;}}return saved;});
+  const[readIds,setReadIds]=useState(()=>{try{return JSON.parse(localStorage.getItem("hakolog_read_v3")||"[]");}catch{return[];}});
+  const[pendingModal,setPendingModal]=useState(null);
+  const[bindNow,setBindNow]=useState(new Date());
+  useEffect(()=>{const t=setInterval(()=>setBindNow(new Date()),60000);return()=>clearInterval(t);},[]);
+  const markRead=id=>{const n=[...readIds,id];setReadIds(n);try{localStorage.setItem("hakolog_read_v3",JSON.stringify(n));}catch{}};
+  const setAtt=v=>{setAttRaw(v);saveLS(LS_KEY,v);};
+  const setAlerts=al=>{const ids=al.filter(a=>a.isRead).map(a=>a.id);setReadIds(ids);try{localStorage.setItem("hakolog_read_v3",JSON.stringify(ids));}catch{}};
+  const licenseAlert={id:"license1",severity:"info",title:"免許証 有効期限",message:"運転免許証の有効期限まで28日です。更新手続きをお忘れなく。",isRead:false,createdAt:new Date()};
+  const buildAlerts=()=>{const result=[{...licenseAlert,isRead:readIds.includes(licenseAlert.id)}];if(att.status==="working"&&att.clockInAt){const bMs=bindNow.getTime()-new Date(att.clockInAt).getTime();const bMin=Math.floor(bMs/60000);if(bMin>=840){const id="bind14";result.unshift({id,severity:"violation",title:"拘束時間 法令違反",message:`拘束時間が${Math.floor(bMin/60)}時間${bMin%60}分です。14時間を超えています（改善基準告示違反）。`,isRead:readIds.includes(id),createdAt:new Date()});}else if(bMin>=780){const id="bind13";result.unshift({id,severity:"warning",title:"拘束時間 警告",message:`拘束時間が${Math.floor(bMin/60)}時間${bMin%60}分です。速やかに業務終了の準備をしてください。`,isRead:readIds.includes(id),createdAt:new Date()});}else if(bMin>=720){const id="bind12";result.unshift({id,severity:"info",title:"拘束時間 注意",message:`拘束時間が${Math.floor(bMin/60)}時間${bMin%60}分です。`,isRead:readIds.includes(id),createdAt:new Date()});}}return result;};
+  const alerts=buildAlerts();
+  const isBreaking=att.status==="on-break"&&screen==="home";
+  const subScreens={"daily-report-pre":"乗務前日報","daily-report-post":"乗務後日報","alerts":"アラート","break-detail":"休憩時間表示","export":"データ連携"};
+  const isSubScreen=screen in subScreens;
+  const NAV_H=60;
+  const navItems=[
+    {key:"home",label:"TOPページ",Icon:()=><svg viewBox="0 0 24 24" className="w-5 h-5" fill="currentColor"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>},
+    {key:"history",label:"勤務履歴",Icon:()=><svg viewBox="0 0 24 24" className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>},
+    {key:"export",label:"データ連携",Icon:()=><svg viewBox="0 0 24 24" className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="12" y1="18" x2="12" y2="12"/><polyline points="9,15 12,18 15,15"/></svg>},
+  ];
+  const renderScreen=()=>{switch(screen){case"home":return<HomeScreen att={att} setAtt={setAtt} alerts={alerts} onNav={setScreen} pendingModal={pendingModal} clearPendingModal={()=>setPendingModal(null)}/>;case"break-detail":return<BreakDetailScreen att={att} setAtt={setAtt} onNav={setScreen}/>;case"daily-report-pre":return<DailyReportScreen type="pre" onNav={setScreen} att={att}/>;case"daily-report-post":return<DailyReportScreen type="post" onNav={setScreen} att={att}/>;case"alerts":return<AlertsScreen alerts={alerts} setAlerts={setAlerts} markRead={markRead}/>;case"history":return<HistoryScreen att={att}/>;case"export":return<ExportScreen att={att}/>;default:return<HomeScreen att={att} setAtt={setAtt} alerts={alerts} onNav={setScreen} pendingModal={pendingModal} clearPendingModal={()=>setPendingModal(null)}/>;}};
+  return(<div className="min-h-screen bg-gray-300 flex items-center justify-center" style={{fontFamily:"'Hiragino Sans','Hiragino Kaku Gothic ProN','Noto Sans JP',sans-serif"}}><div className="relative bg-gray-50 shadow-2xl rounded-3xl overflow-hidden flex flex-col" style={{width:"100%",maxWidth:390,height:"100vh",maxHeight:844}}>{isSubScreen&&<div className="bg-white border-b border-gray-200 px-4 py-2.5 flex items-center flex-shrink-0" style={{height:48}}><button onClick={()=>setScreen("home")} className="text-teal-500 font-medium text-sm flex items-center gap-0.5">‹ 戻る</button><h1 className="absolute left-0 right-0 text-center text-base font-bold text-gray-800 pointer-events-none">{subScreens[screen]}</h1></div>}<div className="flex-1 overflow-hidden flex flex-col" style={{paddingBottom:isBreaking?0:NAV_H}}>{renderScreen()}</div>{!isBreaking&&<div className="absolute bottom-0 left-0 right-0 bg-white border-t border-gray-200" style={{height:NAV_H}}><div className={`grid h-full ${att.status==="working"?"grid-cols-4":"grid-cols-3"}`}>{navItems.map(({key,label,Icon})=>{const active=screen===key;return(<button key={key} onClick={()=>setScreen(key)} className={`flex flex-col items-center justify-center gap-0.5 transition-colors ${active?"text-teal-500":"text-gray-400"}`}><div className={`w-9 h-6 flex items-center justify-center rounded-lg ${active?"bg-teal-50":""}`}><Icon/></div><span className="text-[11px] font-medium">{label}</span></button>);})}{att.status==="working"&&<button onClick={()=>{setScreen("home");setPendingModal("clockout");}} className="flex flex-col items-center justify-center gap-0.5 text-white bg-teal-500"><svg viewBox="0 0 24 24" className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg><span className="text-[11px] font-bold">退勤</span></button>}</div></div>}</div></div>);
+}
+ReactDOM.render(<App/>, document.getElementById('root'));
+</script>
+</body>
+</html>
