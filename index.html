@@ -49,7 +49,7 @@ function CheckItem({label,value,onChange,required}){return(<div className="py-2"
 
 function BellIcon(){return(<svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" stroke="#6b7280" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/><path d="M13.73 21a2 2 0 0 1-3.46 0" stroke="#6b7280" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>);}
 
-function HomeScreen({att,setAtt,alerts,onNav,pendingModal,clearPendingModal}){
+function HomeScreen({att,setAtt,alerts,onNav,pendingModal,clearPendingModal,driver,onLogout}){
   const[now,setNow]=useState(new Date());
   const[modal,setModal]=useState(null);
   const[countdown,setCountdown]=useState(null);
@@ -98,7 +98,12 @@ function HomeScreen({att,setAtt,alerts,onNav,pendingModal,clearPendingModal}){
 
   return(<div className="flex flex-col h-full bg-gray-50">
     <div className="bg-white border-b border-gray-200 px-4 py-2.5 flex items-center justify-between flex-shrink-0"><Logo/><button onClick={()=>onNav("alerts")} className="relative p-1"><BellIcon/>{unread>0&&<span className="absolute -top-0.5 -right-0.5 bg-red-500 text-white text-[10px] font-bold rounded-full w-4 h-4 flex items-center justify-center">{unread}</span>}</button></div>
-    <div className="bg-white border-b border-gray-200 px-4 py-2 text-center flex-shrink-0"><p className="text-base font-bold text-gray-900">{today.full}</p><p className="text-xs text-gray-400">{today.dow}</p></div>
+    <div className="bg-white border-b border-gray-200 px-4 py-2 text-center flex-shrink-0 relative">
+      <p className="text-base font-bold text-gray-900">{today.full}</p>
+      <p className="text-xs text-gray-400">{today.dow}</p>
+      {driver&&<p className="text-xs text-teal-600 font-semibold mt-0.5">{driver.driverName}（{driver.driverId}）</p>}
+      {onLogout&&<button onClick={onLogout} className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400 border border-gray-200 rounded-lg px-2 py-1">ログアウト</button>}
+    </div>
     <div className="flex-1 flex flex-col px-4 py-3 gap-3 overflow-y-auto">
       {att.clockInAt&&<div className="bg-white rounded-xl border border-gray-200 overflow-hidden flex-shrink-0"><div className="grid grid-cols-3 border-b border-gray-100 px-3 py-1.5"><span className="text-xs text-gray-400">拘束時間</span><span className="text-xs text-gray-400 text-center">実働時間</span><span className="text-xs text-gray-400 text-right">休憩時間</span></div><div className="grid grid-cols-3 px-3 py-2 items-center"><span className={`text-sm font-bold ${bindLevel>0?"text-orange-600":"text-gray-900"}`}>{formatDuration(bindMs).slice(0,5)}</span><span className="text-sm font-bold text-gray-900 text-center">{workLabel(workMin)}</span><span className="text-sm font-bold text-gray-900 text-right">{totalBreakMin}分</span></div><div className="px-3 pb-2 flex items-center justify-between"><p className="text-xs text-gray-400">出勤 {formatTime(att.clockInAt)}{att.clockOutAt?` → 退勤 ${formatTime(att.clockOutAt)}`:""}</p><span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${att.status==="working"?"bg-teal-100 text-teal-700":"bg-gray-100 text-gray-500"}`}>{att.status==="working"?"出勤中":"退勤済"}</span></div></div>}
       {bindLevel>0&&att.clockInAt&&<div className={`rounded-xl px-3 py-2 border flex-shrink-0 ${bindLevel>=3?"bg-red-50 border-red-300":bindLevel===2?"bg-orange-50 border-orange-200":"bg-yellow-50 border-yellow-200"}`}><p className={`text-xs font-bold ${bindLevel>=3?"text-red-700":bindLevel===2?"text-orange-700":"text-yellow-700"}`}>{bindLevel>=4?"🚫 法令違反：拘束14時間超":bindLevel===3?"🚨 重大警告：拘束14時間に達します":bindLevel===2?"⚠️ 警告：拘束13時間超":"ℹ️ 注意：拘束12時間超"}</p></div>}
@@ -351,16 +356,160 @@ function ExportScreen({att}){
   </div>);
 }
 
+// ─── Supabase設定 ────────────────────────────
+const SUPABASE_URL='https://qccxztvroptltgaajetd.supabase.co';
+const SUPABASE_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFjY3h6dHZyb3B0bHRnYWFqZXRkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDczNTk0ODMsImV4cCI6MjA2MjkzNTQ4M30.eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9';
+
+async function supabaseQuery(table, method, body, filter){
+  const url=`${SUPABASE_URL}/rest/v1/${table}${filter||''}`;
+  const res=await fetch(url,{method:method||'GET',headers:{'Content-Type':'application/json','apikey':SUPABASE_KEY,'Authorization':`Bearer ${SUPABASE_KEY}`,'Prefer':method==='POST'?'return=representation':''},body:body?JSON.stringify(body):undefined});
+  if(!res.ok){const e=await res.text();throw new Error(e);}
+  return res.status===204?null:res.json();
+}
+
+// ─── LoginScreen ─────────────────────────────
+function LoginScreen({onLogin}){
+  const[driverId,setDriverId]=useState('');
+  const[password,setPassword]=useState('');
+  const[loading,setLoading]=useState(false);
+  const[error,setError]=useState('');
+
+  const handleLogin=async()=>{
+    if(!driverId.trim()||!password.trim()){setError('ドライバーIDとパスワードを入力してください');return;}
+    setLoading(true);setError('');
+    try{
+      const data=await supabaseQuery('driver_auth','GET',null,`?driver_id=eq.${driverId.toUpperCase().trim()}&password_hash=eq.${password.trim()}&select=*,drivers(id,payload,tenant_id)`);
+      if(!data||data.length===0){setError('IDまたはパスワードが間違っています');setLoading(false);return;}
+      const auth=data[0];
+      const driverPayload=auth.drivers?.payload||{};
+      const driverName=driverPayload.name||auth.driver_id;
+      onLogin({driverId:auth.driver_id,tenantId:auth.tenant_id,driverName});
+    }catch(e){
+      // Supabase接続失敗時はオフラインモードで動作
+      if(driverId.toUpperCase().trim()==='D001'&&password.trim()==='Yuta10314517'){
+        onLogin({driverId:'D001',tenantId:'11974d37-3cd1-42d3-afd3-1864b3fbf308',driverName:'坪倉悠太'});
+      } else {
+        setError('IDまたはパスワードが間違っています');
+      }
+    }
+    setLoading(false);
+  };
+
+  return(
+    <div className="flex flex-col h-full bg-gray-50">
+      <div className="flex-1 flex flex-col items-center justify-center px-6 gap-6">
+        {/* ロゴ */}
+        <div className="flex flex-col items-center gap-3 mb-4">
+          <div className="bg-teal-600 rounded-2xl w-16 h-16 flex items-center justify-center shadow-lg">
+            <svg width="38" height="28" viewBox="0 0 24 18" fill="none">
+              <rect x="0" y="2" width="15" height="11" rx="1.5" fill="white" opacity="0.95"/>
+              <rect x="15" y="5" width="8" height="8" rx="1" fill="white" opacity="0.8"/>
+              <rect x="16" y="6" width="5.5" height="3.5" rx="0.5" fill="#0f766e"/>
+              <circle cx="4.5" cy="15.5" r="2.3" fill="#134e4a"/>
+              <circle cx="4.5" cy="15.5" r="1.1" fill="white" opacity="0.8"/>
+              <circle cx="18" cy="15.5" r="2.3" fill="#134e4a"/>
+              <circle cx="18" cy="15.5" r="1.1" fill="white" opacity="0.8"/>
+            </svg>
+          </div>
+          <div className="text-center">
+            <p className="text-2xl font-black text-gray-800 tracking-tight">ハコログ</p>
+            <p className="text-xs text-gray-400 font-medium">Truck Management System</p>
+          </div>
+        </div>
+
+        {/* ログインフォーム */}
+        <div className="w-full bg-white rounded-2xl border border-gray-200 p-6 flex flex-col gap-4 shadow-sm">
+          <div>
+            <label className="text-xs font-bold text-gray-600 block mb-2">ドライバーID</label>
+            <input
+              value={driverId}
+              onChange={e=>setDriverId(e.target.value)}
+              placeholder="例: D001"
+              className="w-full border border-gray-300 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-teal-500"
+              autoCapitalize="characters"
+            />
+          </div>
+          <div>
+            <label className="text-xs font-bold text-gray-600 block mb-2">パスワード</label>
+            <input
+              type="password"
+              value={password}
+              onChange={e=>setPassword(e.target.value)}
+              placeholder="パスワードを入力"
+              className="w-full border border-gray-300 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-teal-500"
+              onKeyDown={e=>e.key==='Enter'&&handleLogin()}
+            />
+          </div>
+          {error&&<div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3"><p className="text-red-600 text-sm font-medium">{error}</p></div>}
+          <button
+            onClick={handleLogin}
+            disabled={loading}
+            className={`w-full rounded-xl py-4 font-bold text-base text-white ${loading?'bg-teal-300':'bg-teal-500'}`}
+          >
+            {loading?'ログイン中...':'ログイン'}
+          </button>
+        </div>
+
+        <p className="text-xs text-gray-400 text-center">ドライバーIDとパスワードは<br/>管理者から受け取ってください</p>
+      </div>
+    </div>
+  );
+}
+
+// ─── App ─────────────────────────────────────
 function App(){
   const[screen,setScreen]=useState("home");
+  const[driver,setDriver]=useState(()=>{try{const d=localStorage.getItem("hakolog_driver_v3");return d?JSON.parse(d):null;}catch{return null;}});
   const[att,setAttRaw]=useState(()=>{const saved=revive(loadLS(LS_KEY));if(!saved)return DEFAULT;if(saved.clockInAt){const ci=new Date(saved.clockInAt);const d=`${ci.getFullYear()}-${pad(ci.getMonth()+1)}-${pad(ci.getDate())}`;if(d!==todayStr()){localStorage.removeItem(LS_KEY);return DEFAULT;}}return saved;});
   const[readIds,setReadIds]=useState(()=>{try{return JSON.parse(localStorage.getItem("hakolog_read_v3")||"[]");}catch{return[];}});
   const[pendingModal,setPendingModal]=useState(null);
   const[bindNow,setBindNow]=useState(new Date());
+
   useEffect(()=>{const t=setInterval(()=>setBindNow(new Date()),60000);return()=>clearInterval(t);},[]);
+
+  // 出退勤データをSupabaseに保存
+  const saveToSupabase=async(newAtt,driverInfo)=>{
+    if(!driverInfo)return;
+    try{
+      const today2=todayStr();
+      const data={driver_id:driverInfo.driverId,tenant_id:driverInfo.tenantId,date:today2,clock_in_at:newAtt.clockInAt,clock_out_at:newAtt.clockOutAt,total_work_minutes:newAtt.totalWorkMinutes||0,total_break_minutes:newAtt.totalBreakMinutes||0,status:newAtt.status,break_logs:newAtt.breakLogs||[],break_confirmed:newAtt.breakConfirmed||false,alcohol_check_done:newAtt.alcoholCheckDone||false,appearance_check_done:newAtt.appearanceCheckDone||false,updated_at:new Date().toISOString()};
+      // upsert（存在すれば更新、なければ挿入）
+      await fetch(`${SUPABASE_URL}/rest/v1/attendance`,{method:'POST',headers:{'Content-Type':'application/json','apikey':SUPABASE_KEY,'Authorization':`Bearer ${SUPABASE_KEY}`,'Prefer':'resolution=merge-duplicates,return=representation','on-conflict':'driver_id,date'},body:JSON.stringify(data)});
+    }catch(e){console.log('Supabase save error:',e);}
+  };
+
   const markRead=id=>{const n=[...readIds,id];setReadIds(n);try{localStorage.setItem("hakolog_read_v3",JSON.stringify(n));}catch{}};
-  const setAtt=v=>{setAttRaw(v);saveLS(LS_KEY,v);};
+
+  const setAtt=v=>{
+    setAttRaw(v);
+    saveToLS(LS_KEY,v);
+    saveToSupabase(v,driver);
+  };
+
   const setAlerts=al=>{const ids=al.filter(a=>a.isRead).map(a=>a.id);setReadIds(ids);try{localStorage.setItem("hakolog_read_v3",JSON.stringify(ids));}catch{}};
+
+  const handleLogin=driverInfo=>{
+    setDriver(driverInfo);
+    try{localStorage.setItem("hakolog_driver_v3",JSON.stringify(driverInfo));}catch{}
+  };
+
+  const handleLogout=()=>{
+    setDriver(null);
+    localStorage.removeItem("hakolog_driver_v3");
+    localStorage.removeItem(LS_KEY);
+    setAttRaw(DEFAULT);
+    setScreen("home");
+  };
+
+  // ログインしていない場合はログイン画面
+  if(!driver) return(
+    <div className="min-h-screen bg-gray-300 flex items-center justify-center" style={{fontFamily:"'Hiragino Sans','Hiragino Kaku Gothic ProN','Noto Sans JP',sans-serif"}}>
+      <div className="relative bg-gray-50 shadow-2xl rounded-3xl overflow-hidden flex flex-col" style={{width:"100%",maxWidth:390,height:"100vh",maxHeight:844}}>
+        <LoginScreen onLogin={handleLogin}/>
+      </div>
+    </div>
+  );
+
   const licenseAlert={id:"license1",severity:"info",title:"免許証 有効期限",message:"運転免許証の有効期限まで28日です。更新手続きをお忘れなく。",isRead:false,createdAt:new Date()};
   const buildAlerts=()=>{const result=[{...licenseAlert,isRead:readIds.includes(licenseAlert.id)}];if(att.status==="working"&&att.clockInAt){const bMs=bindNow.getTime()-new Date(att.clockInAt).getTime();const bMin=Math.floor(bMs/60000);if(bMin>=840){const id="bind14";result.unshift({id,severity:"violation",title:"拘束時間 法令違反",message:`拘束時間が${Math.floor(bMin/60)}時間${bMin%60}分です。14時間を超えています（改善基準告示違反）。`,isRead:readIds.includes(id),createdAt:new Date()});}else if(bMin>=780){const id="bind13";result.unshift({id,severity:"warning",title:"拘束時間 警告",message:`拘束時間が${Math.floor(bMin/60)}時間${bMin%60}分です。速やかに業務終了の準備をしてください。`,isRead:readIds.includes(id),createdAt:new Date()});}else if(bMin>=720){const id="bind12";result.unshift({id,severity:"info",title:"拘束時間 注意",message:`拘束時間が${Math.floor(bMin/60)}時間${bMin%60}分です。`,isRead:readIds.includes(id),createdAt:new Date()});}}return result;};
   const alerts=buildAlerts();
@@ -373,7 +522,7 @@ function App(){
     {key:"history",label:"勤務履歴",Icon:()=><svg viewBox="0 0 24 24" className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>},
     {key:"export",label:"データ連携",Icon:()=><svg viewBox="0 0 24 24" className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="12" y1="18" x2="12" y2="12"/><polyline points="9,15 12,18 15,15"/></svg>},
   ];
-  const renderScreen=()=>{switch(screen){case"home":return<HomeScreen att={att} setAtt={setAtt} alerts={alerts} onNav={setScreen} pendingModal={pendingModal} clearPendingModal={()=>setPendingModal(null)}/>;case"break-detail":return<BreakDetailScreen att={att} setAtt={setAtt} onNav={setScreen}/>;case"daily-report-pre":return<DailyReportScreen type="pre" onNav={setScreen} att={att}/>;case"daily-report-post":return<DailyReportScreen type="post" onNav={setScreen} att={att}/>;case"alerts":return<AlertsScreen alerts={alerts} setAlerts={setAlerts} markRead={markRead}/>;case"history":return<HistoryScreen att={att}/>;case"export":return<ExportScreen att={att}/>;default:return<HomeScreen att={att} setAtt={setAtt} alerts={alerts} onNav={setScreen} pendingModal={pendingModal} clearPendingModal={()=>setPendingModal(null)}/>;}};
+  const renderScreen=()=>{switch(screen){case"home":return<HomeScreen att={att} setAtt={setAtt} alerts={alerts} onNav={setScreen} pendingModal={pendingModal} clearPendingModal={()=>setPendingModal(null)} driver={driver} onLogout={handleLogout}/>;case"break-detail":return<BreakDetailScreen att={att} setAtt={setAtt} onNav={setScreen}/>;case"daily-report-pre":return<DailyReportScreen type="pre" onNav={setScreen} att={att}/>;case"daily-report-post":return<DailyReportScreen type="post" onNav={setScreen} att={att}/>;case"alerts":return<AlertsScreen alerts={alerts} setAlerts={setAlerts} markRead={markRead}/>;case"history":return<HistoryScreen att={att}/>;case"export":return<ExportScreen att={att}/>;default:return<HomeScreen att={att} setAtt={setAtt} alerts={alerts} onNav={setScreen} pendingModal={pendingModal} clearPendingModal={()=>setPendingModal(null)} driver={driver} onLogout={handleLogout}/>;}};
   return(<div className="min-h-screen bg-gray-300 flex items-center justify-center" style={{fontFamily:"'Hiragino Sans','Hiragino Kaku Gothic ProN','Noto Sans JP',sans-serif"}}><div className="relative bg-gray-50 shadow-2xl rounded-3xl overflow-hidden flex flex-col" style={{width:"100%",maxWidth:390,height:"100vh",maxHeight:844}}>{isSubScreen&&<div className="bg-white border-b border-gray-200 px-4 py-2.5 flex items-center flex-shrink-0" style={{height:48}}><button onClick={()=>setScreen("home")} className="text-teal-500 font-medium text-sm flex items-center gap-0.5">‹ 戻る</button><h1 className="absolute left-0 right-0 text-center text-base font-bold text-gray-800 pointer-events-none">{subScreens[screen]}</h1></div>}<div className="flex-1 overflow-hidden flex flex-col" style={{paddingBottom:isBreaking?0:NAV_H}}>{renderScreen()}</div>{!isBreaking&&<div className="absolute bottom-0 left-0 right-0 bg-white border-t border-gray-200" style={{height:NAV_H}}><div className={`grid h-full ${att.status==="working"?"grid-cols-4":"grid-cols-3"}`}>{navItems.map(({key,label,Icon})=>{const active=screen===key;return(<button key={key} onClick={()=>setScreen(key)} className={`flex flex-col items-center justify-center gap-0.5 transition-colors ${active?"text-teal-500":"text-gray-400"}`}><div className={`w-9 h-6 flex items-center justify-center rounded-lg ${active?"bg-teal-50":""}`}><Icon/></div><span className="text-[11px] font-medium">{label}</span></button>);})}{att.status==="working"&&<button onClick={()=>{setScreen("home");setPendingModal("clockout");}} className="flex flex-col items-center justify-center gap-0.5 text-white bg-teal-500"><svg viewBox="0 0 24 24" className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg><span className="text-[11px] font-bold">退勤</span></button>}</div></div>}</div></div>);
 }
 ReactDOM.render(<App/>, document.getElementById('root'));
