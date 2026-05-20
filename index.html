@@ -358,11 +358,11 @@ function ExportScreen({att}){
 
 // ─── Supabase設定 ────────────────────────────
 const SUPABASE_URL='https://qccxztvroptltgaajetd.supabase.co';
-const SUPABASE_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFjY3h6dHZyb3B0bHRnYWFqZXRkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDczNTk0ODMsImV4cCI6MjA2MjkzNTQ4M30.eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9';
+const eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFjY3h6dHZyb3B0bHRnYWFqZXRkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY0Mjg1NjcsImV4cCI6MjA5MjAwNDU2N30.2eJ32hclM8S0PZBZaY1ALlIAPJxXcsOv0Zpo724KQtU='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFjY3h6dHZyb3B0bHRnYWFqZXRkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDczNTk0ODMsImV4cCI6MjA2MjkzNTQ4M30.eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9';
 
 async function supabaseQuery(table, method, body, filter){
   const url=`${SUPABASE_URL}/rest/v1/${table}${filter||''}`;
-  const res=await fetch(url,{method:method||'GET',headers:{'Content-Type':'application/json','apikey':SUPABASE_KEY,'Authorization':`Bearer ${SUPABASE_KEY}`,'Prefer':method==='POST'?'return=representation':''},body:body?JSON.stringify(body):undefined});
+  const res=await fetch(url,{method:method||'GET',headers:{'Content-Type':'application/json','apikey':eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFjY3h6dHZyb3B0bHRnYWFqZXRkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY0Mjg1NjcsImV4cCI6MjA5MjAwNDU2N30.2eJ32hclM8S0PZBZaY1ALlIAPJxXcsOv0Zpo724KQtU,'Authorization':`Bearer ${eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFjY3h6dHZyb3B0bHRnYWFqZXRkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY0Mjg1NjcsImV4cCI6MjA5MjAwNDU2N30.2eJ32hclM8S0PZBZaY1ALlIAPJxXcsOv0Zpo724KQtU}`,'Prefer':method==='POST'?'return=representation':''},body:body?JSON.stringify(body):undefined});
   if(!res.ok){const e=await res.text();throw new Error(e);}
   return res.status===204?null:res.json();
 }
@@ -473,7 +473,7 @@ function App(){
     try{
       const today2=todayStr();
       const data={driver_id:driverInfo.driverId,tenant_id:driverInfo.tenantId,date:today2,clock_in_at:newAtt.clockInAt,clock_out_at:newAtt.clockOutAt,total_work_minutes:newAtt.totalWorkMinutes||0,total_break_minutes:newAtt.totalBreakMinutes||0,status:newAtt.status,break_logs:newAtt.breakLogs||[],break_confirmed:newAtt.breakConfirmed||false,alcohol_check_done:newAtt.alcoholCheckDone||false,appearance_check_done:newAtt.appearanceCheckDone||false,updated_at:new Date().toISOString()};
-      await fetch(`${SUPABASE_URL}/rest/v1/attendance`,{method:'POST',headers:{'Content-Type':'application/json','apikey':SUPABASE_KEY,'Authorization':`Bearer ${SUPABASE_KEY}`,'Prefer':'resolution=merge-duplicates,return=representation','on-conflict':'driver_id,date'},body:JSON.stringify(data)});
+      await fetch(`${SUPABASE_URL}/rest/v1/attendance`,{method:'POST',headers:{'Content-Type':'application/json','apikey':eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFjY3h6dHZyb3B0bHRnYWFqZXRkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY0Mjg1NjcsImV4cCI6MjA5MjAwNDU2N30.2eJ32hclM8S0PZBZaY1ALlIAPJxXcsOv0Zpo724KQtU,'Authorization':`Bearer ${eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFjY3h6dHZyb3B0bHRnYWFqZXRkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY0Mjg1NjcsImV4cCI6MjA5MjAwNDU2N30.2eJ32hclM8S0PZBZaY1ALlIAPJxXcsOv0Zpo724KQtU}`,'Prefer':'resolution=merge-duplicates,return=representation','on-conflict':'driver_id,date'},body:JSON.stringify(data)});
     }catch(e){console.log('Supabase save error:',e);}
   };
 
