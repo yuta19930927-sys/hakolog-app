@@ -49,7 +49,7 @@ function CheckItem({label,value,onChange,required}){return(<div className="py-2"
 
 function BellIcon(){return(<svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" stroke="#6b7280" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/><path d="M13.73 21a2 2 0 0 1-3.46 0" stroke="#6b7280" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>);}
 
-function HomeScreen({att,setAtt,alerts,onNav,pendingModal,clearPendingModal,driver,onLogout}){
+function HomeScreen({att,setAtt,alerts,onNav,pendingModal,clearPendingModal,driver,onLogout,onClockInRequest}){
   const[now,setNow]=useState(new Date());
   const[modal,setModal]=useState(null);
   const[countdown,setCountdown]=useState(null);
@@ -108,7 +108,7 @@ function HomeScreen({att,setAtt,alerts,onNav,pendingModal,clearPendingModal,driv
       {att.clockInAt&&<div className="bg-white rounded-xl border border-gray-200 overflow-hidden flex-shrink-0"><div className="grid grid-cols-3 border-b border-gray-100 px-3 py-1.5"><span className="text-xs text-gray-400">拘束時間</span><span className="text-xs text-gray-400 text-center">実働時間</span><span className="text-xs text-gray-400 text-right">休憩時間</span></div><div className="grid grid-cols-3 px-3 py-2 items-center"><span className={`text-sm font-bold ${bindLevel>0?"text-orange-600":"text-gray-900"}`}>{formatDuration(bindMs).slice(0,5)}</span><span className="text-sm font-bold text-gray-900 text-center">{workLabel(workMin)}</span><span className="text-sm font-bold text-gray-900 text-right">{totalBreakMin}分</span></div><div className="px-3 pb-2 flex items-center justify-between"><p className="text-xs text-gray-400">出勤 {formatTime(att.clockInAt)}{att.clockOutAt?` → 退勤 ${formatTime(att.clockOutAt)}`:""}</p><span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${att.status==="working"?"bg-teal-100 text-teal-700":"bg-gray-100 text-gray-500"}`}>{att.status==="working"?"出勤中":"退勤済"}</span></div></div>}
       {bindLevel>0&&att.clockInAt&&<div className={`rounded-xl px-3 py-2 border flex-shrink-0 ${bindLevel>=3?"bg-red-50 border-red-300":bindLevel===2?"bg-orange-50 border-orange-200":"bg-yellow-50 border-yellow-200"}`}><p className={`text-xs font-bold ${bindLevel>=3?"text-red-700":bindLevel===2?"text-orange-700":"text-yellow-700"}`}>{bindLevel>=4?"🚫 法令違反：拘束14時間超":bindLevel===3?"🚨 重大警告：拘束14時間に達します":bindLevel===2?"⚠️ 警告：拘束13時間超":"ℹ️ 注意：拘束12時間超"}</p></div>}
       <div className="flex-shrink-0">
-        {att.status==="pre-work"&&<div className="flex flex-col gap-1.5"><button onClick={()=>setModal("clockin")} className="w-full bg-teal-500 text-white font-black text-xl rounded-2xl py-6 shadow-md">出勤</button><p className="text-xs text-gray-400 text-center">出勤ボタンを押して勤務を開始してください</p></div>}
+        {att.status==="pre-work"&&<div className="flex flex-col gap-1.5"><button onClick={onClockInRequest||(() =>setModal("clockin"))} className="w-full bg-teal-500 text-white font-black text-xl rounded-2xl py-6 shadow-md">出勤</button><p className="text-xs text-gray-400 text-center">出勤ボタンを押して勤務を開始してください</p></div>}
         {att.status==="working"&&<div><p className="text-xs font-semibold text-gray-500 mb-1.5 px-1">運転日報</p><div className="flex gap-2"><button onClick={()=>onNav("daily-report-pre")} className="flex-1 bg-white border-2 border-teal-500 text-teal-600 font-bold text-sm rounded-xl py-4 flex items-center justify-center gap-1.5">🚛 乗務前日報</button><button onClick={()=>onNav("daily-report-post")} className="flex-1 bg-teal-500 text-white font-bold text-sm rounded-xl py-4 flex items-center justify-center gap-1.5">🚛 乗務後日報</button></div></div>}
         {att.status==="completed"&&<div className="bg-teal-50 border-2 border-teal-200 rounded-2xl p-5 text-center"><p className="text-3xl mb-1">👋</p><p className="text-teal-700 font-black text-xl">お疲れさまでした！</p><p className="text-teal-500 text-sm mt-1">退勤 {formatTime(att.clockOutAt)}</p>{countdown!==null&&<p className="text-gray-400 text-xs mt-2">{countdown}秒後にリセットします...</p>}</div>}
       </div>
@@ -459,6 +459,7 @@ function LoginScreen({onLogin}){
 // ─── App ─────────────────────────────────────
 function App(){
   const[screen,setScreen]=useState("home");
+  const[showLogin,setShowLogin]=useState(false); // 出勤ボタン押したときだけ表示
   const[driver,setDriver]=useState(()=>{try{const d=localStorage.getItem("hakolog_driver_v3");return d?JSON.parse(d):null;}catch{return null;}});
   const[att,setAttRaw]=useState(()=>{const saved=revive(loadLS(LS_KEY));if(!saved)return DEFAULT;if(saved.clockInAt){const ci=new Date(saved.clockInAt);const d=`${ci.getFullYear()}-${pad(ci.getMonth()+1)}-${pad(ci.getDate())}`;if(d!==todayStr()){localStorage.removeItem(LS_KEY);return DEFAULT;}}return saved;});
   const[readIds,setReadIds]=useState(()=>{try{return JSON.parse(localStorage.getItem("hakolog_read_v3")||"[]");}catch{return[];}});
@@ -467,30 +468,41 @@ function App(){
 
   useEffect(()=>{const t=setInterval(()=>setBindNow(new Date()),60000);return()=>clearInterval(t);},[]);
 
-  // 出退勤データをSupabaseに保存
   const saveToSupabase=async(newAtt,driverInfo)=>{
     if(!driverInfo)return;
     try{
       const today2=todayStr();
       const data={driver_id:driverInfo.driverId,tenant_id:driverInfo.tenantId,date:today2,clock_in_at:newAtt.clockInAt,clock_out_at:newAtt.clockOutAt,total_work_minutes:newAtt.totalWorkMinutes||0,total_break_minutes:newAtt.totalBreakMinutes||0,status:newAtt.status,break_logs:newAtt.breakLogs||[],break_confirmed:newAtt.breakConfirmed||false,alcohol_check_done:newAtt.alcoholCheckDone||false,appearance_check_done:newAtt.appearanceCheckDone||false,updated_at:new Date().toISOString()};
-      // upsert（存在すれば更新、なければ挿入）
       await fetch(`${SUPABASE_URL}/rest/v1/attendance`,{method:'POST',headers:{'Content-Type':'application/json','apikey':SUPABASE_KEY,'Authorization':`Bearer ${SUPABASE_KEY}`,'Prefer':'resolution=merge-duplicates,return=representation','on-conflict':'driver_id,date'},body:JSON.stringify(data)});
     }catch(e){console.log('Supabase save error:',e);}
   };
 
   const markRead=id=>{const n=[...readIds,id];setReadIds(n);try{localStorage.setItem("hakolog_read_v3",JSON.stringify(n));}catch{}};
-
-  const setAtt=v=>{
-    setAttRaw(v);
-    saveToLS(LS_KEY,v);
-    saveToSupabase(v,driver);
-  };
-
+  const setAtt=v=>{setAttRaw(v);saveToLS(LS_KEY,v);saveToSupabase(v,driver);};
   const setAlerts=al=>{const ids=al.filter(a=>a.isRead).map(a=>a.id);setReadIds(ids);try{localStorage.setItem("hakolog_read_v3",JSON.stringify(ids));}catch{}};
 
+  // 出勤ボタンが押されたとき → ログイン済みなら即出勤、未ログインならログイン画面へ
+  const handleClockInRequest=()=>{
+    if(driver){
+      // すでにログイン済みなら直接出勤
+      const newAtt={...att,status:"working",clockInAt:new Date()};
+      setAtt(newAtt);
+    } else {
+      // 未ログインならログイン画面を表示
+      setShowLogin(true);
+    }
+  };
+
+  // ログイン成功 → ドライバー情報保存 → 出勤処理
   const handleLogin=driverInfo=>{
     setDriver(driverInfo);
     try{localStorage.setItem("hakolog_driver_v3",JSON.stringify(driverInfo));}catch{}
+    setShowLogin(false);
+    // ログイン後に出勤
+    const newAtt={...att,status:"working",clockInAt:new Date()};
+    setAttRaw(newAtt);
+    saveToLS(LS_KEY,newAtt);
+    saveToSupabase(newAtt,driverInfo);
   };
 
   const handleLogout=()=>{
@@ -501,10 +513,14 @@ function App(){
     setScreen("home");
   };
 
-  // ログインしていない場合はログイン画面
-  if(!driver) return(
+  // ログイン画面をモーダル的に表示
+  if(showLogin) return(
     <div className="min-h-screen bg-gray-300 flex items-center justify-center" style={{fontFamily:"'Hiragino Sans','Hiragino Kaku Gothic ProN','Noto Sans JP',sans-serif"}}>
       <div className="relative bg-gray-50 shadow-2xl rounded-3xl overflow-hidden flex flex-col" style={{width:"100%",maxWidth:390,height:"100vh",maxHeight:844}}>
+        <div className="bg-white border-b border-gray-200 px-4 py-2.5 flex items-center flex-shrink-0" style={{height:48}}>
+          <button onClick={()=>setShowLogin(false)} className="text-teal-500 font-medium text-sm flex items-center gap-0.5">‹ 戻る</button>
+          <h1 className="absolute left-0 right-0 text-center text-base font-bold text-gray-800 pointer-events-none">ログイン</h1>
+        </div>
         <LoginScreen onLogin={handleLogin}/>
       </div>
     </div>
@@ -522,7 +538,7 @@ function App(){
     {key:"history",label:"勤務履歴",Icon:()=><svg viewBox="0 0 24 24" className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>},
     {key:"export",label:"データ連携",Icon:()=><svg viewBox="0 0 24 24" className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="12" y1="18" x2="12" y2="12"/><polyline points="9,15 12,18 15,15"/></svg>},
   ];
-  const renderScreen=()=>{switch(screen){case"home":return<HomeScreen att={att} setAtt={setAtt} alerts={alerts} onNav={setScreen} pendingModal={pendingModal} clearPendingModal={()=>setPendingModal(null)} driver={driver} onLogout={handleLogout}/>;case"break-detail":return<BreakDetailScreen att={att} setAtt={setAtt} onNav={setScreen}/>;case"daily-report-pre":return<DailyReportScreen type="pre" onNav={setScreen} att={att}/>;case"daily-report-post":return<DailyReportScreen type="post" onNav={setScreen} att={att}/>;case"alerts":return<AlertsScreen alerts={alerts} setAlerts={setAlerts} markRead={markRead}/>;case"history":return<HistoryScreen att={att}/>;case"export":return<ExportScreen att={att}/>;default:return<HomeScreen att={att} setAtt={setAtt} alerts={alerts} onNav={setScreen} pendingModal={pendingModal} clearPendingModal={()=>setPendingModal(null)} driver={driver} onLogout={handleLogout}/>;}};
+  const renderScreen=()=>{switch(screen){case"home":return<HomeScreen att={att} setAtt={setAtt} alerts={alerts} onNav={setScreen} pendingModal={pendingModal} clearPendingModal={()=>setPendingModal(null)} driver={driver} onLogout={handleLogout} onClockInRequest={handleClockInRequest}/>;case"break-detail":return<BreakDetailScreen att={att} setAtt={setAtt} onNav={setScreen}/>;case"daily-report-pre":return<DailyReportScreen type="pre" onNav={setScreen} att={att}/>;case"daily-report-post":return<DailyReportScreen type="post" onNav={setScreen} att={att}/>;case"alerts":return<AlertsScreen alerts={alerts} setAlerts={setAlerts} markRead={markRead}/>;case"history":return<HistoryScreen att={att}/>;case"export":return<ExportScreen att={att}/>;default:return<HomeScreen att={att} setAtt={setAtt} alerts={alerts} onNav={setScreen} pendingModal={pendingModal} clearPendingModal={()=>setPendingModal(null)} driver={driver} onLogout={handleLogout} onClockInRequest={handleClockInRequest}/>;}};
   return(<div className="min-h-screen bg-gray-300 flex items-center justify-center" style={{fontFamily:"'Hiragino Sans','Hiragino Kaku Gothic ProN','Noto Sans JP',sans-serif"}}><div className="relative bg-gray-50 shadow-2xl rounded-3xl overflow-hidden flex flex-col" style={{width:"100%",maxWidth:390,height:"100vh",maxHeight:844}}>{isSubScreen&&<div className="bg-white border-b border-gray-200 px-4 py-2.5 flex items-center flex-shrink-0" style={{height:48}}><button onClick={()=>setScreen("home")} className="text-teal-500 font-medium text-sm flex items-center gap-0.5">‹ 戻る</button><h1 className="absolute left-0 right-0 text-center text-base font-bold text-gray-800 pointer-events-none">{subScreens[screen]}</h1></div>}<div className="flex-1 overflow-hidden flex flex-col" style={{paddingBottom:isBreaking?0:NAV_H}}>{renderScreen()}</div>{!isBreaking&&<div className="absolute bottom-0 left-0 right-0 bg-white border-t border-gray-200" style={{height:NAV_H}}><div className={`grid h-full ${att.status==="working"?"grid-cols-4":"grid-cols-3"}`}>{navItems.map(({key,label,Icon})=>{const active=screen===key;return(<button key={key} onClick={()=>setScreen(key)} className={`flex flex-col items-center justify-center gap-0.5 transition-colors ${active?"text-teal-500":"text-gray-400"}`}><div className={`w-9 h-6 flex items-center justify-center rounded-lg ${active?"bg-teal-50":""}`}><Icon/></div><span className="text-[11px] font-medium">{label}</span></button>);})}{att.status==="working"&&<button onClick={()=>{setScreen("home");setPendingModal("clockout");}} className="flex flex-col items-center justify-center gap-0.5 text-white bg-teal-500"><svg viewBox="0 0 24 24" className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg><span className="text-[11px] font-bold">退勤</span></button>}</div></div>}</div></div>);
 }
 ReactDOM.render(<App/>, document.getElementById('root'));
