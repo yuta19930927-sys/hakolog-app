@@ -56,7 +56,7 @@ function HomeScreen({att,setAtt,alerts,onNav,pendingModal,clearPendingModal,driv
   useEffect(()=>{const t=setInterval(()=>setNow(new Date()),1000);return()=>clearInterval(t);},[]);
   useEffect(()=>{if(pendingModal){setModal(pendingModal);if(clearPendingModal)clearPendingModal();}},[pendingModal]);
   useEffect(()=>{if(att.status==="completed")setCountdown(5);},[att.status]);
-  useEffect(()=>{if(countdown===null)return;if(countdown<=0){setAtt({...DEFAULT});setCountdown(null);return;}const t=setTimeout(()=>setCountdown(c=>c-1),1000);return()=>clearTimeout(t);},[countdown]);
+  useEffect(()=>{if(countdown===null)return;if(countdown<=0){setAttRaw({...DEFAULT});saveLS(LS_KEY,{...DEFAULT});setCountdown(null);return;}const t=setTimeout(()=>setCountdown(c=>c-1),1000);return()=>clearTimeout(t);},[countdown]);
   const unread=alerts.filter(a=>!a.isRead).length;
   const today=formatDateJP(now);
   const bindMs=att.clockInAt?(att.status==="completed"&&att.clockOutAt?new Date(att.clockOutAt)-new Date(att.clockInAt):now-new Date(att.clockInAt)):0;
