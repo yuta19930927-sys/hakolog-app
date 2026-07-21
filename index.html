@@ -35,7 +35,13 @@
 <style>
   * { -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
   html, body { margin:0; padding:0; background:#f3f4f6;
-    font-family: -apple-system, BlinkMacSystemFont, 'Hiragino Sans', 'Hiragino Kaku Gothic ProN', 'Noto Sans JP', sans-serif; }
+    font-family: -apple-system, BlinkMacSystemFont, 'Hiragino Sans', 'Hiragino Kaku Gothic ProN', 'Noto Sans JP', sans-serif;
+    /* 一部の画面で、内容が画面の横幅にわずかに収まっていない不具合が
+       確認されたため、万一どこかの要素が横にはみ出しても、画面全体が
+       横スクロールしてしまわないようにする保険。 */
+    overflow-x: hidden;
+    max-width: 100vw;
+  }
   input, textarea, select, button { font-family: inherit; }
   button { min-height: 44px; }
 
@@ -3504,7 +3510,7 @@ function HomeScreen(_ref12) {
   }, /*#__PURE__*/React.createElement("p", {
     className: "text-[11px] text-teal-700 font-bold"
   }, "\u21BB \u4F1A\u793E\u3068\u540C\u671F\u3057\u3066\u3044\u307E\u3059\u2026")), /*#__PURE__*/React.createElement("div", {
-    className: "flex-1 overflow-y-auto px-4 py-3 flex flex-col gap-3"
+    className: "flex-1 overflow-y-auto px-4 py-2.5 flex flex-col gap-2"
   }, /*#__PURE__*/React.createElement("div", {
     className: "text-center"
   }, /*#__PURE__*/React.createElement("p", {
@@ -3516,7 +3522,7 @@ function HomeScreen(_ref12) {
   }, driver.driverName)), /*#__PURE__*/React.createElement(Card, {
     className: "overflow-hidden shadow-sm"
   }, /*#__PURE__*/React.createElement("div", {
-    className: "bg-gradient-to-br from-teal-500 to-teal-600 px-5 py-4"
+    className: "bg-gradient-to-br from-teal-500 to-teal-600 px-5 py-3.5"
   }, /*#__PURE__*/React.createElement("p", {
     className: "text-teal-100 text-xs font-bold mb-1"
   }, "\u4ECA\u65E5\u306E\u5831\u916C"), /*#__PURE__*/React.createElement("p", {
@@ -3530,7 +3536,7 @@ function HomeScreen(_ref12) {
     value: yen(payout.grossPay)
   }), /*#__PURE__*/React.createElement(Stat, {
     label: "\u63A7\u9664\u5F8C\u306E\u632F\u8FBC\u4E88\u5B9A",
-    value: payout.isNegative ? "—" : yen(payout.netPay),
+    value: payout.isNegative ? yen(0) : yen(payout.netPay),
     sub: "\u7A3C\u50CD ".concat(payout.workDays, "\u65E5")
   })), payout.draftCount > 0 && /*#__PURE__*/React.createElement("div", {
     className: "bg-gray-50 border-t border-gray-200 px-4 py-2.5 flex items-center justify-between"
@@ -3580,7 +3586,7 @@ function HomeScreen(_ref12) {
         preCheck: shift.preCheck || null
       });
     },
-    className: "w-full bg-teal-500 text-white font-black text-xl rounded-2xl py-6 shadow-md active:bg-teal-600"
+    className: "w-full bg-teal-500 text-white font-black text-xl rounded-2xl py-4 shadow-md active:bg-teal-600"
   }, finished ? "稼働を再開する" : "稼働開始"), /*#__PURE__*/React.createElement("button", {
     onClick: function onClick() {
       return setPreCheckOpen(true);
@@ -3606,7 +3612,19 @@ function HomeScreen(_ref12) {
   }, /*#__PURE__*/React.createElement("button", {
     onClick: onOpenEntry,
     className: "w-full bg-teal-500 text-white font-black text-lg rounded-xl py-4 active:bg-teal-600"
-  }, "\uFF0B \u914D\u9001\u5B9F\u7E3E\u3092\u5165\u529B"), /*#__PURE__*/React.createElement("button", {
+  }, "\uFF0B \u914D\u9001\u5B9F\u7E3E\u3092\u5165\u529B"), /*#__PURE__*/React.createElement("div", {
+    className: "flex gap-2"
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: function onClick() {
+      return onNav("shift-report-pre");
+    },
+    className: "flex-1 bg-white border-2 border-teal-500 text-teal-600 font-bold text-sm rounded-xl py-3 flex items-center justify-center gap-1"
+  }, "\uD83D\uDE9B \u4E57\u52D9\u524D\u65E5\u5831"), /*#__PURE__*/React.createElement("button", {
+    onClick: function onClick() {
+      return onNav("shift-report-post");
+    },
+    className: "flex-1 bg-teal-500 text-white font-bold text-sm rounded-xl py-3 flex items-center justify-center gap-1"
+  }, "\uD83D\uDE9B \u4E57\u52D9\u5F8C\u65E5\u5831")), /*#__PURE__*/React.createElement("button", {
     onClick: function onClick() {
       return setConfirm("end");
     },
@@ -3614,12 +3632,22 @@ function HomeScreen(_ref12) {
   }, "\u7A3C\u50CD\u7D42\u4E86"))), finished && /*#__PURE__*/React.createElement(Card, {
     className: "p-5 text-center bg-teal-50 border-teal-200"
   }, /*#__PURE__*/React.createElement("p", {
-    className: "text-3xl mb-1"
-  }, "\uD83D\uDC4B"), /*#__PURE__*/React.createElement("p", {
     className: "text-teal-700 font-black text-xl"
   }, "\u304A\u75B2\u308C\u3055\u307E\u3067\u3057\u305F\uFF01"), /*#__PURE__*/React.createElement("p", {
     className: "text-teal-500 text-sm mt-1"
-  }, fmtTime(shift.startAt), " \u301C ", fmtTime(shift.endAt))), todayRecs.length > 0 && /*#__PURE__*/React.createElement(Card, {
+  }, fmtTime(shift.startAt), " \u301C ", fmtTime(shift.endAt)), /*#__PURE__*/React.createElement("div", {
+    className: "flex gap-2 mt-3"
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: function onClick() {
+      return onNav("shift-report-pre");
+    },
+    className: "flex-1 bg-white border-2 border-teal-500 text-teal-600 font-bold text-sm rounded-xl py-3 flex items-center justify-center gap-1"
+  }, "\uD83D\uDE9B \u4E57\u52D9\u524D\u65E5\u5831"), /*#__PURE__*/React.createElement("button", {
+    onClick: function onClick() {
+      return onNav("shift-report-post");
+    },
+    className: "flex-1 bg-teal-500 text-white font-bold text-sm rounded-xl py-3 flex items-center justify-center gap-1"
+  }, "\uD83D\uDE9B \u4E57\u52D9\u5F8C\u65E5\u5831"))), todayRecs.length > 0 && /*#__PURE__*/React.createElement(Card, {
     className: "overflow-hidden"
   }, /*#__PURE__*/React.createElement("div", {
     className: "px-4 py-2 bg-gray-50 border-b border-gray-100"
@@ -3652,13 +3680,13 @@ function HomeScreen(_ref12) {
       return onNav("notices");
     },
     className: "text-[11px] text-teal-600 font-bold min-h-0"
-  }, "\u3059\u3079\u3066\u898B\u308B \u203A")), notices.slice(0, 2).map(function (n, i) {
+  }, "\u3059\u3079\u3066\u898B\u308B \u203A")), notices.slice(0, 1).map(function (n, i) {
     return /*#__PURE__*/React.createElement("div", {
       key: n.id || i,
       onClick: function onClick() {
         return onNav("notices");
       },
-      className: "px-4 py-2.5 ".concat(i < 1 ? "border-b border-gray-100" : "", " ").concat(!n.isRead ? "bg-teal-50/40" : "")
+      className: "px-4 py-2.5 ".concat(!n.isRead ? "bg-teal-50/40" : "")
     }, /*#__PURE__*/React.createElement("div", {
       className: "flex items-center gap-1.5"
     }, !n.isRead && /*#__PURE__*/React.createElement("span", {
@@ -3877,19 +3905,7 @@ function EntrySheet(_ref14) {
       return f(qtyKey, v);
     },
     suffix: qtySuffix
-  })), /*#__PURE__*/React.createElement("div", {
-    className: "mb-3.5"
-  }, /*#__PURE__*/React.createElement("label", {
-    className: "text-xs font-bold text-gray-600 block mb-1.5"
-  }, "\u5358\u4FA1\uFF08\u4F1A\u793E\u8A2D\u5B9A\uFF09"), /*#__PURE__*/React.createElement("div", {
-    className: "w-full border-2 border-gray-200 rounded-xl px-4 py-3 bg-gray-50 flex items-center justify-between"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "text-base font-bold text-gray-700"
-  }, yen(effDriverUnit)), /*#__PURE__*/React.createElement("span", {
-    className: "text-xs text-gray-400"
-  }, "1", qtySuffix, "\u3042\u305F\u308A")), effDriverUnit === 0 && /*#__PURE__*/React.createElement("p", {
-    className: "text-[11px] text-amber-600 mt-1"
-  }, "\u3053\u306E\u6848\u4EF6\u306E\u5358\u4FA1\u304C\u8A2D\u5B9A\u3055\u308C\u3066\u3044\u307E\u305B\u3093\u3002\u4F1A\u793E\u306B\u3054\u78BA\u8A8D\u304F\u3060\u3055\u3044\u3002")), /*#__PURE__*/React.createElement("button", {
+  })), /*#__PURE__*/React.createElement("button", {
     onClick: function onClick() {
       return setShowExtra(function (v) {
         return !v;
@@ -4409,7 +4425,7 @@ function PayoutScreen(_ref20) {
     className: "text-xs font-bold text-gray-600"
   }, "\u632F\u8FBC\u4E88\u5B9A\u984D"), /*#__PURE__*/React.createElement("span", {
     className: "text-2xl font-black ".concat(p.isNegative ? "text-gray-400" : "text-gray-900")
-  }, p.isNegative ? "—" : yen(p.netPay))), p.isNegative && /*#__PURE__*/React.createElement("p", {
+  }, p.isNegative ? yen(0) : yen(p.netPay))), p.isNegative && /*#__PURE__*/React.createElement("p", {
     className: "text-[11px] text-gray-500 mt-2 leading-relaxed bg-gray-50 rounded-lg px-3 py-2"
   }, "\u30EA\u30FC\u30B9\u6599\u306A\u3069\u306E\u56FA\u5B9A\u8CBB\u306F\u6708\u521D\u306B\u307E\u3068\u3081\u3066\u8A08\u4E0A\u3055\u308C\u308B\u305F\u3081\u3001\u6708\u306E\u524D\u534A\u306F\u30DE\u30A4\u30CA\u30B9\u306B\u306A\u308A\u307E\u3059\u3002 \u7A3C\u50CD\u304C\u9032\u3080\u3068\u30D7\u30E9\u30B9\u306B\u8EE2\u3058\u307E\u3059\u3002"))), /*#__PURE__*/React.createElement(Card, {
     className: "overflow-hidden"
@@ -4534,7 +4550,7 @@ function StatementScreen(_ref31) {
       return "<tr><td>".concat(esc(r.date), "</td><td class=\"n\">").concat(num(r.count) || "—", "</td><td class=\"n\">").concat(yen(num(r.driverAmount) - add), "</td><td class=\"n\">").concat(add ? yen(add) : "—", "</td><td class=\"n b\">").concat(yen(r.driverAmount), "</td></tr>");
     }).join("");
     var bank = profile !== null && profile !== void 0 && profile.bankName ? "".concat(esc(profile.bankName), " ").concat(esc(profile.branchName || ""), " ").concat(esc(profile.accountType || "普通"), " ").concat(esc(profile.accountNumber || ""), " ").concat(esc(profile.accountHolderKana || "")) : "口座情報が未登録です";
-    var html = "<!DOCTYPE html><html lang=\"ja\"><head><meta charset=\"utf-8\"><title>\u5831\u916C\u660E\u7D30 ".concat(esc(driver === null || driver === void 0 ? void 0 : driver.driverName), " ").concat(esc(month), "</title>\n<style>*{box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,'Hiragino Sans','Hiragino Kaku Gothic ProN','Noto Sans JP','Yu Gothic',sans-serif;color:#222;margin:0;padding:20px;background:#f5f5f5}\n.c{max-width:800px;margin:0 auto;background:#fff;padding:30px}\n.bar{text-align:right;margin-bottom:10px}.bar button{padding:10px 20px;font-size:14px;font-weight:700;color:#fff;background:#14b8a6;border:none;border-radius:6px;cursor:pointer;font-family:inherit}\n.top{height:5px;background:linear-gradient(90deg,#2dd4bf,#0f766e);margin:-30px -30px 18px}\n.h{display:flex;justify-content:space-between;align-items:flex-start}.co{font-size:17px;font-weight:700}.sub{font-size:11px;color:#777;margin-top:2px}\n.t{text-align:right}.t .l{font-size:22px;font-weight:700;letter-spacing:3px}.t .m{font-size:12px;color:#666;margin-top:4px}\n.line{height:2px;background:#222;margin:12px 0 18px}.to{font-size:19px;font-weight:700}\n.sm{display:flex;justify-content:space-between;align-items:center;background:#f0fdfa;border:1px solid #99f6e4;border-radius:6px;padding:16px 20px;margin:16px 0}\n.sm .l{font-size:12px;color:#0f766e;font-weight:700}.sm .a{font-size:32px;font-weight:700;color:#0f766e}\n.st{display:flex;gap:24px;font-size:12px;color:#555;margin-bottom:14px}.st b{font-size:15px;color:#222;margin-left:4px}\n.cols{display:flex;gap:20px}.col{flex:1}h3{font-size:13px;margin:0 0 6px;padding-bottom:4px;border-bottom:2px solid #222}\ntable{width:100%;border-collapse:collapse}td,th{padding:6px 4px;font-size:12px;border-bottom:1px solid #e5e5e5}\n.n{text-align:right}.b{font-weight:700}.e{color:#999;text-align:center}\n.tot{display:flex;justify-content:space-between;padding:8px 4px;margin-top:4px;border-top:2px solid #222;font-weight:700;font-size:13px}\n.d{margin-top:24px}.d thead th{background:#fafafa;border-top:2px solid #222;border-bottom:2px solid #222;text-align:left;font-size:11px}\n.bk{margin-top:20px;background:#f8f8f8;border-left:4px solid #14b8a6;padding:10px 14px;font-size:12px}\n.bk .l{font-size:11px;color:#777;font-weight:700}\n.w{color:#c62828;font-weight:700;font-size:12px}\n@page{ size: A4; margin: 12mm; }\n@media print{body{background:#fff;padding:0}.c{padding:0;max-width:100%;width:100%}.bar{display:none}tr{page-break-inside:avoid}}\n</style></head><body><div class=\"c\">\n<div class=\"bar\"><button onclick=\"window.print()\">\u5370\u5237 / PDF\u4FDD\u5B58</button></div>\n<div class=\"top\"></div>\n<div class=\"h\"><div><div class=\"co\">").concat(esc((company === null || company === void 0 ? void 0 : company.name) || "配送管理株式会社"), "</div>\n<div class=\"sub\">").concat(company !== null && company !== void 0 && company.address ? esc(company.address) + "<br>" : "").concat(company !== null && company !== void 0 && company.phone ? "TEL: " + esc(company.phone) : "", "</div></div>\n<div class=\"t\"><div class=\"l\">\u5831\u916C\u660E\u7D30\u66F8</div><div class=\"m\">\u5BFE\u8C61\u671F\u9593: ").concat(esc(yy), "\u5E74").concat(esc(String(Number(mm))), "\u6708\u5206</div><div class=\"m\">\u767A\u884C\u65E5: ").concat(esc(ymd()), "</div></div></div>\n<div class=\"line\"></div>\n<div class=\"to\">").concat(esc(driver === null || driver === void 0 ? void 0 : driver.driverName), " \u69D8</div>\n<div class=\"sm\"><div><div class=\"l\">\u304A\u632F\u8FBC\u91D1\u984D\uFF08\u652F\u7D66\u5408\u8A08 \u2212 \u63A7\u9664\u5408\u8A08\uFF09</div>\n").concat(p.isNegative ? '<div class="w">※控除が支給を上回っています。会社にご確認ください。</div>' : "", "</div>\n<div class=\"a\">").concat(yen(p.netPay), "</div></div>\n<div class=\"st\"><div>\u7A3C\u50CD\u65E5\u6570<b>").concat(p.workDays, "\u65E5</b></div><div>\u914D\u9001\u500B\u6570<b>").concat(p.totalCount.toLocaleString(), "\u500B</b></div><div>\u652F\u7D66\u5408\u8A08<b>").concat(yen(p.grossPay), "</b></div></div>\n<div class=\"cols\">\n<div class=\"col\"><h3>\u652F\u7D66</h3><table>").concat(rows(payRows), "</table><div class=\"tot\"><span>\u652F\u7D66\u5408\u8A08</span><span>").concat(yen(p.grossPay), "</span></div></div>\n<div class=\"col\"><h3>\u63A7\u9664</h3><table>").concat(rows(dedRows), "</table><div class=\"tot\"><span>\u63A7\u9664\u5408\u8A08</span><span>").concat(yen(p.totalDeduction), "</span></div></div>\n</div>\n<div class=\"d\"><h3 style=\"border:none;margin-bottom:0\">\u7A3C\u50CD\u660E\u7D30</h3><table>\n<thead><tr><th>\u65E5\u4ED8</th><th class=\"n\">\u500B\u6570</th><th class=\"n\">\u57FA\u672C\u5831\u916C</th><th class=\"n\">\u5B9F\u8CBB\u30FB\u624B\u5F53</th><th class=\"n\">\u8A08</th></tr></thead>\n<tbody>").concat(detail || '<tr><td colspan="5" class="e">この月の稼働記録はありません</td></tr>', "</tbody></table></div>\n<div class=\"bk\"><div class=\"l\">\u632F\u8FBC\u5148</div><div>").concat(bank, "</div></div>\n</div></body></html>");
+    var html = "<!DOCTYPE html><html lang=\"ja\"><head><meta charset=\"utf-8\"><title>\u5831\u916C\u660E\u7D30 ".concat(esc(driver === null || driver === void 0 ? void 0 : driver.driverName), " ").concat(esc(month), "</title>\n<style>*{box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,'Hiragino Sans','Hiragino Kaku Gothic ProN','Noto Sans JP','Yu Gothic',sans-serif;color:#222;margin:0;padding:20px;background:#f5f5f5}\n.c{max-width:800px;margin:0 auto;background:#fff;padding:30px}\n.bar{text-align:right;margin-bottom:10px}.bar button{padding:10px 20px;font-size:14px;font-weight:700;color:#fff;background:#14b8a6;border:none;border-radius:6px;cursor:pointer;font-family:inherit}\n.top{height:5px;background:linear-gradient(90deg,#2dd4bf,#0f766e);margin:-30px -30px 18px}\n.h{display:flex;justify-content:space-between;align-items:flex-start}.co{font-size:17px;font-weight:700}.sub{font-size:11px;color:#777;margin-top:2px}\n.t{text-align:right}.t .l{font-size:22px;font-weight:700;letter-spacing:3px}.t .m{font-size:12px;color:#666;margin-top:4px}\n.line{height:2px;background:#222;margin:12px 0 18px}.to{font-size:19px;font-weight:700}\n.sm{display:flex;justify-content:space-between;align-items:center;background:#f0fdfa;border:1px solid #99f6e4;border-radius:6px;padding:16px 20px;margin:16px 0}\n.sm .l{font-size:12px;color:#0f766e;font-weight:700}.sm .a{font-size:32px;font-weight:700;color:#0f766e}\n.st{display:flex;gap:24px;font-size:12px;color:#555;margin-bottom:14px}.st b{font-size:15px;color:#222;margin-left:4px}\n.cols{display:flex;gap:20px}.col{flex:1}h3{font-size:13px;margin:0 0 6px;padding-bottom:4px;border-bottom:2px solid #222}\ntable{width:100%;border-collapse:collapse}td,th{padding:6px 4px;font-size:12px;border-bottom:1px solid #e5e5e5}\n.n{text-align:right}.b{font-weight:700}.e{color:#999;text-align:center}\n.tot{display:flex;justify-content:space-between;padding:8px 4px;margin-top:4px;border-top:2px solid #222;font-weight:700;font-size:13px}\n.d{margin-top:24px}.d thead th{background:#fafafa;border-top:2px solid #222;border-bottom:2px solid #222;text-align:left;font-size:11px}\n.bk{margin-top:20px;background:#f8f8f8;border-left:4px solid #14b8a6;padding:10px 14px;font-size:12px}\n.bk .l{font-size:11px;color:#777;font-weight:700}\n.w{color:#c62828;font-weight:700;font-size:12px}\n@page{ size: A4; margin: 12mm; }\n@media print{body{background:#fff;padding:0}.c{padding:0;max-width:100%;width:100%}.bar{display:none}tr{page-break-inside:avoid}}\n</style></head><body><div class=\"c\">\n<div class=\"bar\"><button onclick=\"window.print()\">\u5370\u5237 / PDF\u4FDD\u5B58</button></div>\n<div class=\"top\"></div>\n<div class=\"h\"><div><div class=\"co\">").concat(esc((company === null || company === void 0 ? void 0 : company.name) || "配送管理株式会社"), "</div>\n<div class=\"sub\">").concat(company !== null && company !== void 0 && company.address ? esc(company.address) + "<br>" : "").concat(company !== null && company !== void 0 && company.phone ? "TEL: " + esc(company.phone) : "", "</div></div>\n<div class=\"t\"><div class=\"l\">\u5831\u916C\u660E\u7D30\u66F8</div><div class=\"m\">\u5BFE\u8C61\u671F\u9593: ").concat(esc(yy), "\u5E74").concat(esc(String(Number(mm))), "\u6708\u5206</div><div class=\"m\">\u767A\u884C\u65E5: ").concat(esc(ymd()), "</div></div></div>\n<div class=\"line\"></div>\n<div class=\"to\">").concat(esc(driver === null || driver === void 0 ? void 0 : driver.driverName), " \u69D8</div>\n<div class=\"sm\"><div><div class=\"l\">\u304A\u632F\u8FBC\u91D1\u984D\uFF08\u652F\u7D66\u5408\u8A08 \u2212 \u63A7\u9664\u5408\u8A08\uFF09</div>\n").concat(p.isNegative ? '<div class="w">※控除が支給を上回っています。会社にご確認ください。</div>' : "", "</div>\n<div class=\"a\">").concat(yen(p.isNegative ? 0 : p.netPay), "</div></div>\n<div class=\"st\"><div>\u7A3C\u50CD\u65E5\u6570<b>").concat(p.workDays, "\u65E5</b></div><div>\u914D\u9001\u500B\u6570<b>").concat(p.totalCount.toLocaleString(), "\u500B</b></div><div>\u652F\u7D66\u5408\u8A08<b>").concat(yen(p.grossPay), "</b></div></div>\n<div class=\"cols\">\n<div class=\"col\"><h3>\u652F\u7D66</h3><table>").concat(rows(payRows), "</table><div class=\"tot\"><span>\u652F\u7D66\u5408\u8A08</span><span>").concat(yen(p.grossPay), "</span></div></div>\n<div class=\"col\"><h3>\u63A7\u9664</h3><table>").concat(rows(dedRows), "</table><div class=\"tot\"><span>\u63A7\u9664\u5408\u8A08</span><span>").concat(yen(p.totalDeduction), "</span></div></div>\n</div>\n<div class=\"d\"><h3 style=\"border:none;margin-bottom:0\">\u7A3C\u50CD\u660E\u7D30</h3><table>\n<thead><tr><th>\u65E5\u4ED8</th><th class=\"n\">\u500B\u6570</th><th class=\"n\">\u57FA\u672C\u5831\u916C</th><th class=\"n\">\u5B9F\u8CBB\u30FB\u624B\u5F53</th><th class=\"n\">\u8A08</th></tr></thead>\n<tbody>").concat(detail || '<tr><td colspan="5" class="e">この月の稼働記録はありません</td></tr>', "</tbody></table></div>\n<div class=\"bk\"><div class=\"l\">\u632F\u8FBC\u5148</div><div>").concat(bank, "</div></div>\n</div></body></html>");
     var w = window.open("", "_blank");
     if (!w) {
       alert("ポップアップがブロックされました。ブラウザの設定で許可してください。");
@@ -4568,7 +4584,7 @@ function StatementScreen(_ref31) {
     className: "text-gray-300 text-xs font-bold mb-1"
   }, "\u632F\u8FBC\u4E88\u5B9A\u984D"), /*#__PURE__*/React.createElement("p", {
     className: "text-white text-4xl font-black leading-none"
-  }, yen(p.netPay)), /*#__PURE__*/React.createElement("p", {
+  }, yen(p.isNegative ? 0 : p.netPay)), /*#__PURE__*/React.createElement("p", {
     className: "text-gray-400 text-xs mt-2"
   }, "\u7A3C\u50CD", p.workDays, "\u65E5 / \u652F\u7D66 ", yen(p.grossPay))), /*#__PURE__*/React.createElement("div", {
     className: "flex divide-x divide-gray-100"
@@ -4604,6 +4620,211 @@ function StatementScreen(_ref31) {
   }, "\u4F1A\u793E\u306B\u53E3\u5EA7\u60C5\u5831\u306E\u767B\u9332\u3092\u4F9D\u983C\u3057\u3066\u304F\u3060\u3055\u3044\u3002\u767B\u9332\u3055\u308C\u306A\u3044\u3068\u5831\u916C\u304C\u632F\u308A\u8FBC\u3081\u307E\u305B\u3093\u3002")), /*#__PURE__*/React.createElement("div", {
     className: "h-6"
   }));
+}
+
+
+/* ---------- 乗務前日報・乗務後日報 ----------
+   以前ハコログにあった機能を復活させたもの。
+   車両点検・アルコールチェック等は既存の「乗務前点検」機能と内容が
+   重複するため、そちらは実装せず「乗務記録」（出退庫時刻・走行距離・
+   給油・道路状況等）と、乗務後のみの「積荷」情報に絞って実装する。
+   1日1件のレコードとして、乗務前・乗務後それぞれの提出時刻を記録する。 */
+function ShiftReportScreen(_ref100) {
+  var type = _ref100.type,
+    driver = _ref100.driver,
+    shift = _ref100.shift,
+    shiftReports = _ref100.shiftReports,
+    onSave = _ref100.onSave,
+    onNav = _ref100.onNav;
+  var isPre = type === "pre";
+  // 【重要】ymd()（＝今日の日付）をそのまま使うと、日をまたぐ夜間勤務の場合、
+  // 乗務前と乗務後で別の日付になってしまい、同じ勤務のはずが別々の
+  // レコードとして扱われてしまう（実際に検証で見つかった不具合）。
+  // 稼働開始時に記録された shift.date を基準にすることで、日をまたいでも
+  // 同じ勤務の乗務前・乗務後が必ず同じレコードにまとまるようにする。
+  var todayStr = (shift && shift.date) || ymd();
+  var driverId = driver.driverRecordId;
+  var existing = (shiftReports || []).find(function (r) {
+    return r.date === todayStr && r.driverId === driverId;
+  }) || null;
+
+  var emptyForm = {
+    vehicle: "", departureLoc: "", odometerOut: "", weather: null,
+    depH: "", depM: "", retH: "", retM: "", returnLoc: "車庫", via: "",
+    fuelAmount: "", fuelOdometer: "", odometerIn: "",
+    highway: null, forklift: null, abnormal: null, abnormalNote: "", memo: "",
+  };
+  var _useState_sr1 = useState(existing ? _objectSpread(_objectSpread({}, emptyForm), existing) : emptyForm),
+    _useState_sr2 = _slicedToArray(_useState_sr1, 2),
+    form = _useState_sr2[0], setForm = _useState_sr2[1];
+  var f = function f(k, v) { setForm(function (p) { return _objectSpread(_objectSpread({}, p), {}, _defineProperty({}, k, v)); }); };
+
+  var emptyCargo = { status: null, type: "", weight: "", ratio: "" };
+  var _useState_sr3 = useState(existing && existing.cargo ? existing.cargo : [_objectSpread({}, emptyCargo), _objectSpread({}, emptyCargo)]),
+    _useState_sr4 = _slicedToArray(_useState_sr3, 2),
+    cargo = _useState_sr4[0], setCargo = _useState_sr4[1];
+  var setCg = function setCg(i, k, v) { setCargo(function (p) { return p.map(function (c, j) { return j === i ? _objectSpread(_objectSpread({}, c), {}, _defineProperty({}, k, v)) : c; }); }); };
+
+  var _useState_sr5 = useState(false),
+    _useState_sr6 = _slicedToArray(_useState_sr5, 2),
+    submitted = _useState_sr6[0], setSubmitted = _useState_sr6[1];
+  var _useState_sr7 = useState("record"),
+    _useState_sr8 = _slicedToArray(_useState_sr7, 2),
+    tab = _useState_sr8[0], setTab = _useState_sr8[1];
+
+  var handleSubmit = function handleSubmit() {
+    // 【重要】「*」を付けた必須項目が、実際には何もチェックされないまま
+    // 空欄で提出できてしまっていた（元のファイルも同様だったが、
+    // 表示上「必須」と示している以上、実際に確認するべき箇所）。
+    // 乗務後日報は「乗務記録」「積荷」の2タブに分かれているため、
+    // どちらのタブに不足があるか分けて把握し、そちらに自動で
+    // 切り替えることで「どこを直せばいいか分からない」を防ぐ。
+    var missingRecord = [];
+    var missingCargo = [];
+    if (isPre) {
+      if (!form.vehicle) missingRecord.push("車両番号");
+      if (!form.departureLoc) missingRecord.push("出庫地");
+      if (!form.odometerOut) missingRecord.push("出庫時メーター");
+      if (!form.weather) missingRecord.push("天気");
+    } else {
+      if (!form.depH || !form.depM) missingRecord.push("出庫時間");
+      if (!form.retH || !form.retM) missingRecord.push("帰庫時間");
+      if (!form.returnLoc) missingRecord.push("帰庫地");
+      if (!form.odometerOut) missingRecord.push("出庫メーター");
+      if (!form.odometerIn) missingRecord.push("帰庫メーター");
+      if (!form.highway) missingRecord.push("高速道路の使用");
+      if (!form.forklift) missingRecord.push("フォークリフトの使用");
+      if (!form.abnormal) missingRecord.push("異常の有無");
+      cargo.forEach(function (c, i) {
+        if (!c.status) missingCargo.push("積載状況".concat(i + 1));
+      });
+    }
+    var missing = missingRecord.concat(missingCargo);
+    if (missing.length > 0) {
+      setTab(missingRecord.length > 0 ? "record" : "cargo");
+      alert("次の必須項目が未入力です：\n".concat(missing.join("、")));
+      return;
+    }
+    var payload = _objectSpread(_objectSpread(_objectSpread({}, existing || {}), form), {}, {
+      id: (existing && existing.id) || "SR-".concat(Date.now()),
+      driverId: driverId,
+      date: todayStr,
+    });
+    if (!isPre) payload.cargo = cargo;
+    payload[isPre ? "preSubmittedAt" : "postSubmittedAt"] = new Date().toISOString();
+    onSave(payload, existing && existing._dbId);
+    setSubmitted(true);
+  };
+
+  if (submitted) {
+    return /*#__PURE__*/React.createElement("div", {
+      className: "flex-1 flex flex-col items-center justify-center gap-3 bg-gray-50"
+    }, /*#__PURE__*/React.createElement("p", {
+      className: "text-5xl"
+    }, "\uD83D\uDCCB"), /*#__PURE__*/React.createElement("p", {
+      className: "text-lg font-black text-teal-600"
+    }, isPre ? "乗務前日報" : "乗務後日報", "を提出しました"), /*#__PURE__*/React.createElement("button", {
+      onClick: function onClick() { return onNav("home"); },
+      className: "text-teal-600 text-sm font-bold mt-2"
+    }, "ホームに戻る"));
+  }
+
+  var yesNoButtons = function yesNoButtons(key, label) {
+    return /*#__PURE__*/React.createElement("div", {
+      className: "mt-2"
+    }, /*#__PURE__*/React.createElement("p", {
+      className: "text-xs text-gray-400"
+    }, label, /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")), /*#__PURE__*/React.createElement("div", {
+      className: "grid grid-cols-2 gap-1.5 mt-1"
+    }, /*#__PURE__*/React.createElement("button", {
+      onClick: function onClick() { return f(key, "yes"); },
+      className: "py-2 rounded text-sm ".concat(form[key] === "yes" ? "bg-gray-400 text-white" : "bg-gray-100 text-gray-500")
+    }, "有り"), /*#__PURE__*/React.createElement("button", {
+      onClick: function onClick() { return f(key, "no"); },
+      className: "py-2 rounded text-sm ".concat(form[key] === "no" ? "bg-gray-400 text-white" : "bg-gray-100 text-gray-500")
+    }, "無し")));
+  };
+
+  var recordTabContent = isPre
+    ? /*#__PURE__*/React.createElement("div", {
+        className: "bg-white rounded-xl border border-gray-200 overflow-hidden"
+      }, /*#__PURE__*/React.createElement("div", {
+        className: "px-3 py-2 border-b border-gray-100"
+      }, /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-400" }, "日報入力日"), /*#__PURE__*/React.createElement("p", { className: "text-sm text-gray-800" }, todayStr)),
+        /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 border-b border-gray-100" }, /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-400" }, "車両番号", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")), /*#__PURE__*/React.createElement("input", { value: form.vehicle, onChange: function onChange(e) { return f("vehicle", e.target.value); }, className: "w-full border border-gray-300 rounded px-2 py-1 text-sm mt-1" })),
+        /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 border-b border-gray-100" }, /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-400" }, "出庫地", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")), /*#__PURE__*/React.createElement("input", { value: form.departureLoc, onChange: function onChange(e) { return f("departureLoc", e.target.value); }, className: "w-full border border-gray-200 rounded px-2 py-1 text-sm mt-1" })),
+        /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 border-b border-gray-100" }, /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-400" }, "出庫時メーター", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")), /*#__PURE__*/React.createElement("div", { className: "flex items-center gap-2 mt-1" }, /*#__PURE__*/React.createElement("input", { value: form.odometerOut, onChange: function onChange(e) { return f("odometerOut", e.target.value); }, className: "flex-1 border border-gray-200 rounded px-2 py-1 text-sm text-right" }), /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-500" }, "km"))),
+        /*#__PURE__*/React.createElement("div", { className: "px-3 py-2" }, /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-400" }, "天気", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")), /*#__PURE__*/React.createElement("div", { className: "flex gap-2 mt-2" }, [{ key: "sun", label: "晴", emoji: "☀️" }, { key: "cloud", label: "曇", emoji: "☁️" }, { key: "rain", label: "雨", emoji: "🌧" }, { key: "snow", label: "雪", emoji: "❄️" }].map(function (w) {
+          return /*#__PURE__*/React.createElement("button", {
+            key: w.key,
+            onClick: function onClick() { return f("weather", w.key); },
+            className: "flex flex-col items-center justify-center w-14 h-12 rounded-lg border-2 gap-0.5 ".concat(form.weather === w.key ? "border-teal-500 bg-teal-50 text-teal-600" : "border-gray-200 bg-gray-50 text-gray-400")
+          }, /*#__PURE__*/React.createElement("span", { className: "text-lg" }, w.emoji), /*#__PURE__*/React.createElement("span", { className: "text-[9px] font-medium" }, w.label));
+        }))))
+    : /*#__PURE__*/React.createElement("div", {
+        className: "bg-white rounded-xl border border-gray-200 overflow-hidden"
+      },
+        /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 border-b border-gray-100" }, /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-400" }, "出庫時間", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")), /*#__PURE__*/React.createElement("div", { className: "flex items-center gap-1 mt-1" }, /*#__PURE__*/React.createElement("input", { value: form.depH, onChange: function onChange(e) { return f("depH", e.target.value); }, placeholder: "09", maxLength: 2, className: "w-14 border border-gray-300 rounded px-2 py-1 text-sm text-center" }), /*#__PURE__*/React.createElement("span", { className: "text-gray-400" }, ":"), /*#__PURE__*/React.createElement("input", { value: form.depM, onChange: function onChange(e) { return f("depM", e.target.value); }, placeholder: "00", maxLength: 2, className: "w-14 border border-gray-300 rounded px-2 py-1 text-sm text-center" }))),
+        /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 border-b border-gray-100" }, /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-400" }, "帰庫時間", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")), /*#__PURE__*/React.createElement("div", { className: "flex items-center gap-1 mt-1" }, /*#__PURE__*/React.createElement("input", { value: form.retH, onChange: function onChange(e) { return f("retH", e.target.value); }, placeholder: "17", maxLength: 2, className: "w-14 border border-gray-300 rounded px-2 py-1 text-sm text-center" }), /*#__PURE__*/React.createElement("span", { className: "text-gray-400" }, ":"), /*#__PURE__*/React.createElement("input", { value: form.retM, onChange: function onChange(e) { return f("retM", e.target.value); }, placeholder: "00", maxLength: 2, className: "w-14 border border-gray-300 rounded px-2 py-1 text-sm text-center" }))),
+        /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 border-b border-gray-100" }, /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-400" }, "帰庫地", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")), /*#__PURE__*/React.createElement("input", { value: form.returnLoc, onChange: function onChange(e) { return f("returnLoc", e.target.value); }, className: "w-full border border-gray-200 rounded px-2 py-1 text-sm mt-1" })),
+        /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 border-b border-gray-100" }, /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-400" }, "経過地"), /*#__PURE__*/React.createElement("input", { value: form.via, onChange: function onChange(e) { return f("via", e.target.value); }, className: "w-full border border-gray-200 rounded px-2 py-1 text-sm mt-1" })),
+        /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 border-b border-gray-100" }, /*#__PURE__*/React.createElement("p", { className: "text-xs font-bold text-gray-600" }, "■給油"), /*#__PURE__*/React.createElement("div", { className: "flex items-center gap-2 mt-1" }, /*#__PURE__*/React.createElement("input", { value: form.fuelAmount, onChange: function onChange(e) { return f("fuelAmount", e.target.value); }, placeholder: "給油量", className: "flex-1 border border-gray-200 rounded px-2 py-1 text-sm text-right" }), /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-500" }, "L"), /*#__PURE__*/React.createElement("input", { value: form.fuelOdometer, onChange: function onChange(e) { return f("fuelOdometer", e.target.value); }, placeholder: "給油時メーター", className: "flex-1 border border-gray-200 rounded px-2 py-1 text-sm text-right" }), /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-500" }, "km"))),
+        /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 border-b border-gray-100" }, /*#__PURE__*/React.createElement("p", { className: "text-xs font-bold text-gray-600" }, "■走行距離"), /*#__PURE__*/React.createElement("div", { className: "flex items-center justify-between mt-1" }, /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-400" }, "出庫メーター", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")), /*#__PURE__*/React.createElement("div", { className: "flex items-center gap-1" }, /*#__PURE__*/React.createElement("input", { value: form.odometerOut, onChange: function onChange(e) { return f("odometerOut", e.target.value); }, className: "w-24 border border-gray-200 rounded px-2 py-1 text-sm text-right" }), /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-500" }, "km"))), /*#__PURE__*/React.createElement("div", { className: "flex items-center justify-between mt-1.5" }, /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-400" }, "帰庫メーター", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")), /*#__PURE__*/React.createElement("div", { className: "flex items-center gap-1" }, /*#__PURE__*/React.createElement("input", { value: form.odometerIn, onChange: function onChange(e) { return f("odometerIn", e.target.value); }, className: "w-24 border border-gray-200 rounded px-2 py-1 text-sm text-right" }), /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-500" }, "km")))),
+        /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 border-b border-gray-100" }, /*#__PURE__*/React.createElement("p", { className: "text-xs font-bold text-gray-600" }, "■道路、運行の状況"),
+          yesNoButtons("highway", "高速道路の使用"),
+          yesNoButtons("forklift", "フォークリフトの使用"),
+          yesNoButtons("abnormal", "異常"),
+          form.abnormal === "yes" && /*#__PURE__*/React.createElement("textarea", { value: form.abnormalNote, onChange: function onChange(e) { return f("abnormalNote", e.target.value); }, rows: 2, placeholder: "遅延・事故の概要及び、原因について記入", className: "w-full border border-gray-200 rounded px-2 py-1.5 text-xs mt-2 resize-none" })),
+        /*#__PURE__*/React.createElement("div", { className: "px-3 py-2" }, /*#__PURE__*/React.createElement("p", { className: "text-xs font-bold text-gray-600" }, "■記事・メモ"), /*#__PURE__*/React.createElement("textarea", { value: form.memo, onChange: function onChange(e) { return f("memo", e.target.value); }, rows: 3, className: "w-full border border-gray-200 rounded px-2 py-1.5 text-sm mt-1 resize-none" })));
+
+  var cargoTabContent = /*#__PURE__*/React.createElement("div", {
+    className: "space-y-3"
+  }, cargo.map(function (c, i) {
+    return /*#__PURE__*/React.createElement("div", {
+      key: i,
+      className: "bg-white rounded-xl border border-gray-200 overflow-hidden"
+    }, /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 bg-gray-50 border-b border-gray-100" }, /*#__PURE__*/React.createElement("p", { className: "text-xs font-bold text-gray-700" }, "積荷", i + 1)),
+      /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 divide-y divide-gray-100" },
+        /*#__PURE__*/React.createElement("div", { className: "pb-2" }, /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-500 mb-1" }, "積載状況", i + 1, /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")), /*#__PURE__*/React.createElement("div", { className: "grid grid-cols-2 gap-1.5" }, /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return setCg(i, "status", "no"); }, className: "py-2 rounded text-sm ".concat(c.status === "no" ? "bg-gray-400 text-white" : "bg-gray-100 text-gray-500") }, "否"), /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return setCg(i, "status", "ok"); }, className: "py-2 rounded text-sm ".concat(c.status === "ok" ? "bg-red-400 text-white" : "bg-gray-100 text-gray-400") }, "良"))),
+        /*#__PURE__*/React.createElement("div", { className: "py-2" }, /*#__PURE__*/React.createElement("input", { value: c.type, onChange: function onChange(e) { return setCg(i, "type", e.target.value); }, placeholder: "積荷の種類", className: "w-full border border-gray-200 rounded px-2 py-1.5 text-sm" })),
+        /*#__PURE__*/React.createElement("div", { className: "pt-2 flex items-center gap-2" }, /*#__PURE__*/React.createElement("input", { value: c.weight, onChange: function onChange(e) { return setCg(i, "weight", e.target.value); }, placeholder: "\u7A4D\u8F09\u91CD\u91CF".concat(i + 1), className: "flex-1 border border-gray-200 rounded px-2 py-1.5 text-sm text-right" }), /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-500" }, "t"), /*#__PURE__*/React.createElement("input", { value: c.ratio, onChange: function onChange(e) { return setCg(i, "ratio", e.target.value); }, placeholder: "\u7A4D\u8F09\u5272\u5408".concat(i + 1), className: "flex-1 border border-gray-200 rounded px-2 py-1.5 text-sm text-right" }), /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-500" }, "%"))));
+  }));
+
+  var tabs = isPre ? [] : [["record", "乗務記録"], ["cargo", "積荷"]];
+
+  return /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-col bg-gray-50 h-full"
+  },
+    /*#__PURE__*/React.createElement("div", {
+      className: "bg-white border-b border-gray-200 flex-shrink-0 flex items-center px-3 py-2"
+    }, /*#__PURE__*/React.createElement("button", {
+      onClick: function onClick() { return onNav("home"); },
+      className: "text-teal-600 text-sm font-bold px-1"
+    }, "‹ 戻る"), /*#__PURE__*/React.createElement("p", {
+      className: "flex-1 text-center text-sm font-bold text-gray-700 pr-8"
+    }, isPre ? "乗務前日報" : "乗務後日報")),
+    !isPre && /*#__PURE__*/React.createElement("div", {
+      className: "bg-white border-b border-gray-200 flex-shrink-0 flex"
+    }, tabs.map(function (_ref101) {
+      var _ref102 = _slicedToArray(_ref101, 2), key = _ref102[0], label = _ref102[1];
+      return /*#__PURE__*/React.createElement("button", {
+        key: key,
+        onClick: function onClick() { return setTab(key); },
+        className: "flex-1 py-2.5 text-xs font-bold border-b-2 ".concat(tab === key ? "border-teal-500 text-teal-600" : "border-transparent text-gray-400")
+      }, label);
+    })),
+    /*#__PURE__*/React.createElement("div", {
+      className: "flex-1 overflow-y-auto px-3 py-3 space-y-3"
+    }, /*#__PURE__*/React.createElement("p", { className: "text-right text-xs text-red-500" }, "（*）：必須項目"),
+      (isPre || tab === "record") && recordTabContent,
+      !isPre && tab === "cargo" && cargoTabContent,
+      /*#__PURE__*/React.createElement("div", { className: "h-4" })),
+    /*#__PURE__*/React.createElement("div", {
+      className: "px-3 py-3 bg-white border-t border-gray-200 flex-shrink-0"
+    }, /*#__PURE__*/React.createElement("button", {
+      onClick: handleSubmit,
+      className: "w-full bg-teal-500 text-white font-semibold text-sm rounded-xl py-3"
+    }, "提出する")));
 }
 
 /* ---------- スケジュール ---------- */
@@ -4643,7 +4864,14 @@ function ScheduleScreen(_ref38) {
     records.forEach(function (r) {
       return put(r.date, "recs", r);
     });
-    events.forEach(function (e) {
+    // 【重要】以前はここで会社の全イベントをそのまま表示していたため、
+    // 入金期日・支払期日といった、実際の金額入りの経理情報が
+    // ドライバーの予定画面にそのまま見えてしまっていた（重大な情報漏洩）。
+    // ドライバーには関係のない経理・営業系の種類は、ここで確実に除外する。
+    var FINANCE_EVENT_TYPES = ["payment_due", "payment_receive", "bank_in", "bank_out", "sales"];
+    events.filter(function (e) {
+      return !FINANCE_EVENT_TYPES.includes(e === null || e === void 0 ? void 0 : e.type);
+    }).forEach(function (e) {
       return put(e.date, "evs", e);
     });
     return map;
@@ -5059,17 +5287,19 @@ function ProfileScreen(_ref41) {
     var label = _ref43.label,
       value = _ref43.value,
       locked = _ref43.locked;
+    // 【重要】以前は「ラベルと値を横並びにして、値だけ右寄せ」というレイアウトだった。
+    // 電話番号・銀行名など値が長くなりがちな項目で、画面の右端で見切れる
+    // 不具合が実際に確認されたため、ラベルを上・値を下に積む縦並びに変更し、
+    // 値が横幅いっぱいを自由に使える形にした（折り返しても崩れない）。
     return /*#__PURE__*/React.createElement("div", {
-      className: "px-4 py-3 border-b border-gray-100 last:border-0 flex items-start justify-between gap-3"
+      className: "px-4 py-3 border-b border-gray-100 last:border-0"
     }, /*#__PURE__*/React.createElement("span", {
-      className: "text-xs text-gray-400 flex-shrink-0 pt-0.5"
-    }, label), /*#__PURE__*/React.createElement("div", {
-      className: "text-right min-w-0"
-    }, /*#__PURE__*/React.createElement("span", {
-      className: "text-sm font-bold text-gray-800 break-words"
+      className: "text-xs text-gray-400 block"
+    }, label), /*#__PURE__*/React.createElement("span", {
+      className: "text-sm font-bold text-gray-800 break-words block mt-0.5"
     }, value || "—"), locked && /*#__PURE__*/React.createElement("span", {
       className: "block text-[10px] text-gray-300 mt-0.5"
-    }, "\uD83D\uDD12 \u4F1A\u793E\u306E\u307F\u5909\u66F4\u53EF")));
+    }, "\uD83D\uDD12 \u4F1A\u793E\u306E\u307F\u5909\u66F4\u53EF"));
   };
 
   /* 免許・車検の期限は自分では気づきにくい。
@@ -5367,6 +5597,10 @@ function App() {
     _useState72 = _slicedToArray(_useState71, 2),
     records = _useState72[0],
     setRecords = _useState72[1];
+  var _useStateSR = useState([]),
+    _useStateSR2 = _slicedToArray(_useStateSR, 2),
+    shiftReports = _useStateSR2[0],
+    setShiftReports = _useStateSR2[1];
   var _useState73 = useState([]),
     _useState74 = _slicedToArray(_useState73, 2),
     jobTypes = _useState74[0],
@@ -5516,10 +5750,14 @@ function App() {
               filter: "?tenant_id=eq.".concat(d.tenantId, "&payload->>type=eq.driver_invoice&payload->>driverId=eq.").concat(encodeURIComponent(d.driverRecordId), "&select=id,payload")
             }).catch(function () {
               return [];
+            }),
+            // 乗務前日報・乗務後日報（自分の分のみ）
+            api.listMine("shift_reports", d.tenantId, d.driverRecordId).catch(function () {
+              return [];
             })]);
           case 3:
             _yield$Promise$all = _context15.v;
-            _yield$Promise$all2 = _slicedToArray(_yield$Promise$all, 8);
+            _yield$Promise$all2 = _slicedToArray(_yield$Promise$all, 9);
             myDriverRows = _yield$Promise$all2[0];
             recs = _yield$Promise$all2[1];
             jts = _yield$Promise$all2[2];
@@ -5528,6 +5766,7 @@ function App() {
             comps = _yield$Promise$all2[5];
             myOrders = _yield$Promise$all2[6];
             myInvoices = _yield$Promise$all2[7];
+            setShiftReports((_yield$Promise$all2[8] || []).filter(function (r) { return r && r.driverId === d.driverRecordId; }));
             setOrders((myOrders || []).map(function (r) {
               return _objectSpread(_objectSpread({}, r.payload || {}), {}, {
                 _dbId: r.id
@@ -5953,6 +6192,28 @@ function App() {
     };
   }();
 
+  /** 乗務前日報・乗務後日報の保存。1日1件のレコードを、乗務前・乗務後で
+      それぞれ upsert する（同じ日の分は上書きされる）。 */
+  var saveShiftReport = function saveShiftReport(payload, dbId) {
+    setShiftReports(function (prev) {
+      var exists = prev.some(function (r) { return r.id === payload.id; });
+      return exists ? prev.map(function (r) { return r.id === payload.id ? _objectSpread(_objectSpread({}, payload), {}, { _dbId: r._dbId }) : r; }) : [].concat(_toConsumableArray(prev), [payload]);
+    });
+    // 【重要】保存先のdbIdをローカルの状態に反映しないと、乗務前を提出した
+    // 直後（サーバー応答が返る前）にすぐ乗務後を提出した場合、同じ日の
+    // レコードを更新するはずが、dbIdが分からず別の新しい行を
+    // 作ってしまう（実際に検証で見つかった不具合）。
+    // upsertRecord が返す最終的なdbIdを、必ずここで反映する。
+    api.upsertRecord("shift_reports", driver.tenantId, payload, dbId).then(function (resolvedDbId) {
+      if (!resolvedDbId) return;
+      setShiftReports(function (prev) {
+        return prev.map(function (r) { return r.id === payload.id ? _objectSpread(_objectSpread({}, r), {}, { _dbId: resolvedDbId }) : r; });
+      });
+    }).catch(function (e) {
+      console.error("shift_reports upsert error:", e);
+    });
+  };
+
   /**
    * ===== 今月分をまとめて申請する =====
    *
@@ -6211,6 +6472,9 @@ function App() {
       return "info";
     };
     return events.filter(function (e) {
+      // 念のため、経理・営業系の種類はキーワードに関わらず確実に除外する
+      // （案件名・顧客名がたまたまキーワードと一致してしまう事故を防ぐ）。
+      if (["payment_due", "payment_receive", "bank_in", "bank_out", "sales"].includes(e === null || e === void 0 ? void 0 : e.type)) return false;
       return e.notice || /お知らせ|連絡|重要|単価|案件|イベント/.test("".concat(e.type || "").concat(e.title || ""));
     }).map(function (e) {
       return {
@@ -6365,8 +6629,15 @@ function App() {
 
   /* --- 稼働開始・終了 --- */
   var changeShift = function changeShift(s) {
+    // 【重要】以前はここで毎回 date: ymd() と「今日の日付」に上書きしていたため、
+    // 日をまたぐ夜間勤務で「稼働終了」を押した瞬間、稼働開始時の日付が
+    // 翌日の日付に書き換わってしまっていた（実際に検証で見つかった不具合）。
+    // これにより、乗務前日報・乗務後日報が別の日付として扱われ、
+    // 同じ勤務のはずが別々のレコードになってしまう。
+    // 既に日付が設定されている（＝稼働中、または再開時）なら、その日付を
+    // そのまま引き継ぎ、新しく稼働を開始する場合のみ今日の日付を設定する。
     var next = _objectSpread(_objectSpread({}, s), {}, {
-      date: ymd()
+      date: s.date || ymd()
     });
     setShift(next);
     LS.set(K_SHIFT, next);
@@ -6380,12 +6651,20 @@ function App() {
   var handleLogout = function handleLogout() {
     // 点検の下書きも必ず消す。消さないと、同じ端末を交代で使う場合に
     // 前のドライバーの未完了の点検内容が、次にログインした人に見えてしまう。
+    // 【重要】チャット履歴・乗務日報も、ログアウト時に画面上の状態としては
+    // 残ったままだった。次のドライバーがログインしてサーバーからの再取得が
+    // 終わるまでの一瞬、前のドライバーの個人的なチャット内容が見えてしまう
+    // 危険があったため、ここで確実にリセットする。
     setDriver(null);
     LS.del(K_DRIVER);
     LS.del(K_SHIFT);
     LS.del(K_PRECHECK_DRAFT);
+    LS.del(K_READ);
     setProfile(null);
     setRecords([]);
+    setShiftReports([]);
+    setChatMsgs([]);
+    setChatReady(false);
     setScreen("home");
   };
 
@@ -6562,6 +6841,24 @@ function App() {
           events: events,
           profile: profile
         });
+      case "shift-report-pre":
+        return /*#__PURE__*/React.createElement(ShiftReportScreen, {
+          type: "pre",
+          driver: driver,
+          shift: shift,
+          shiftReports: shiftReports,
+          onSave: saveShiftReport,
+          onNav: setScreen
+        });
+      case "shift-report-post":
+        return /*#__PURE__*/React.createElement(ShiftReportScreen, {
+          type: "post",
+          driver: driver,
+          shift: shift,
+          shiftReports: shiftReports,
+          onSave: saveShiftReport,
+          onNav: setScreen
+        });
       case "more":
         return /*#__PURE__*/React.createElement(MoreScreen, null);
       case "notices":
@@ -6597,7 +6894,7 @@ function App() {
     }
   };
   var NAV_H = 62;
-  var hideNav = screen === "chat"; // チャットはキーボードが出るのでナビを隠す
+  var hideNav = screen === "chat" || screen === "shift-report-pre" || screen === "shift-report-post"; // チャット・乗務日報はキーボード操作や専用フッターがあるためナビを隠す
 
   return /*#__PURE__*/React.createElement("div", {
     className: outerClass
