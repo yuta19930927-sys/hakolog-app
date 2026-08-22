@@ -1303,6 +1303,35 @@ var ym = function ym() {
   var d = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : new Date();
   return "".concat(d.getFullYear(), "-").concat(pad(d.getMonth() + 1));
 };
+/** 【機能追加・監査で発見】お知らせの日付が「2026-08-15」のような
+    表記だけだと、「今日届いたばかり」なのか「何日も前から未読の
+    まま放置している」のか、パッと見て区別しづらい。「今日」
+    「3日前」のような、直感的に新しさが分かる表示を追加する。 */
+var relativeDateLabel = function relativeDateLabel(dateStr) {
+  if (!dateStr) return "";
+  var target = new Date(dateStr + "T00:00:00");
+  if (isNaN(target.getTime())) return dateStr;
+  var todayD = new Date(ymd() + "T00:00:00");
+  var diffDays = Math.round((todayD - target) / 86400000);
+  if (diffDays === 0) return "今日";
+  if (diffDays === 1) return "昨日";
+  if (diffDays > 1 && diffDays <= 6) return "".concat(diffDays, "\u65E5\u524D");
+  return dateStr;
+};
+/** 【機能追加・監査で発見】events（お知らせ・カレンダーイベント）が、
+    今まで件数・日付の絞り込みを一切せず、テナントの全履歴を、
+    ログイン中の全ドライバーが60秒ごとに繰り返し取得していた。
+    会社の運用期間が長くなるほど、またドライバー数が増えるほど、
+    通信量・DB負荷が際限なく悪化する設計だった。
+    直近3ヶ月分（今月＋過去2ヶ月）だけに絞り込む。過去のお知らせを
+    確認したい需要にも、ある程度応えられる範囲。 */
+var eventsDateRangeFilter = function eventsDateRangeFilter() {
+  var d = new Date();
+  d.setMonth(d.getMonth() - 2);
+  d.setDate(1);
+  var cutoff = ymd(d);
+  return "&payload->>date=gte.".concat(cutoff);
+};
 var num = function num(v) {
   return Number(v) || 0;
 };
@@ -1445,7 +1474,7 @@ var storage = {
    │                                                              │
    │  本番に戻すときは、下の行を false に変えるだけ。               │
    └──────────────────────────────────────────────────────────────┘ */
-var LOCAL_MODE = true;
+var LOCAL_MODE = false;
 
 /* ハコマネと同一プロジェクト。ここを変えると管理側と繋がらなくなるので注意。 */
 var SUPABASE_URL = 'https://qccxztvroptltgaajetd.supabase.co';
@@ -1948,6 +1977,26 @@ var localApi = {
         }
       }, _callee6);
     }))();
+  },
+  /** ローカルモードでは常に "123456" を正解コードとして扱う（開発確認用）。 */
+  setPasswordWithCode: function setPasswordWithCode(driverId, code, newPassword) {
+    return _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee6b() {
+      var err;
+      return _regenerator().w(function (_context6b) {
+        while (1) switch (_context6b.n) {
+          case 0:
+            if (code.trim() === "123456") {
+              _context6b.n = 1;
+              break;
+            }
+            err = new Error("コードが正しくありません（ローカルモードでは 123456 固定）。");
+            err.code = "CODE_MISMATCH";
+            throw err;
+          case 1:
+            return _context6b.a(2, true);
+        }
+      }, _callee6b);
+    }))();
   }
 };
 
@@ -1992,7 +2041,7 @@ var api = {
   request: function request(table) {
     var _arguments2 = arguments;
     return _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee7() {
-      var _ref2, _ref2$method, method, body, _ref2$filter, filter, prefer, headers, res, _t, _t2, _t3;
+      var _ref2, _ref2$method, method, body, _ref2$filter, filter, prefer, headers, res, _t, _t2, _t3, _bodyText, _err, _errJson;
       return _regenerator().w(function (_context7) {
         while (1) switch (_context7.n) {
           case 0:
@@ -2020,15 +2069,39 @@ var api = {
             _context7.n = 2;
             return res.text();
           case 2:
-            _t3 = _t2.concat.call(_t2, _context7.v);
-            throw new _t(_t3);
+            _bodyText = _context7.v;
+            _t3 = _t2.concat.call(_t2, _bodyText);
+            _err = new _t(_t3);
+            // 【重要・不具合修正】サーバー側の金額検証トリガー（STEP2で
+            // 実装）が「個数が異常です」等の理由で意図的に保存を拒否した
+            // 場合、これまでは通信障害と全く同じ Error として扱われて
+            // いた。そのため、この拒否は「一時的な通信の問題」だと
+            // 誤解され、端末のキューに残ったまま、何度再送信しても
+            // トリガーが同じ理由で拒否し続け、永遠に同期されない状態に
+            // なっていた。その間、画面上（報酬計算）には楽観的に反映
+            // された、実際にはサーバーに保存されていない金額が、
+            // ずっと表示され続けてしまう危険があった。
+            // PostgRESTは、トリガーの raise exception を、レスポンス
+            // JSON の message フィールドに、そのままのメッセージで
+            // 返す。これを検知し、「再送信しても解決しない、
+            // 検証エラー」として区別できるようにする。
+            if (res.status === 400 || res.status === 500) {
+              try {
+                _errJson = JSON.parse(_bodyText);
+                if (_errJson && _errJson.message) {
+                  _err.code = "VALIDATION_REJECTED";
+                  _err.message = _errJson.message;
+                }
+              } catch (_e) {}
+            }
+            throw _err;
           case 3:
             return _context7.a(2, res.status === 204 ? null : res.json());
         }
       }, _callee7);
     }))();
   },
-  /** ハコマネのテーブルは {id, payload, tenant_id} 形式。payload の中身が実データ。 */list: function list(table, tenantId) {
+  /** ハコマネのテーブルは {id, payload, tenant_id} 形式。payload の中身が実データ。 */list: function list(table, tenantId, extraFilter) {
     return _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee8() {
       var rows;
       return _regenerator().w(function (_context8) {
@@ -2036,7 +2109,7 @@ var api = {
           case 0:
             _context8.n = 1;
             return api.request(table, {
-              filter: "?tenant_id=eq.".concat(tenantId, "&select=id,payload")
+              filter: "?tenant_id=eq.".concat(tenantId).concat(extraFilter || "", "&select=id,payload")
             });
           case 1:
             rows = _context8.v;
@@ -2085,15 +2158,43 @@ var api = {
   upsertRecord: function upsertRecord(table, tenantId, payload, dbId) {
     return _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee0() {
       var _created$;
-      var created;
+      var created, existing, serverRow, serverPayload, conflictErr;
       return _regenerator().w(function (_context0) {
         while (1) switch (_context0.n) {
           case 0:
             if (!dbId) {
+              _context0.n = 4;
+              break;
+            }
+            // 【重要・不具合修正】以前は dbId が分かっていれば、サーバー側の
+            // 現在の内容を一切確認せず、無条件で PATCH（上書き）していた。
+            // これにより、次のような事故が実際に起こり得た：
+            //   ①ドライバーがオフラインで配送個数「10個」を入力
+            //   ②その間、事務員がハコマネ側で同じ実績を「15個」に修正
+            //   ③ドライバーの端末が通信復旧し、キューにあった古い
+            //     「10個」をそのまま送信 → 事務員の修正が消えてしまう
+            // （実際にこのシナリオを再現・確認した）。
+            // 上書きする前に、必ずサーバー側の現在の内容と更新日時を
+            // 取得し、比較する。
+            _context0.n = 1;
+            return api.request(table, {
+              filter: "?id=eq.".concat(dbId, "&select=id,payload")
+            }).catch(function () {
+              return null;
+            });
+          case 1:
+            serverRow = (_context0.v || [])[0];
+            serverPayload = serverRow && serverRow.payload;
+            if (!(serverPayload && serverPayload.updatedAt && payload.updatedAt && serverPayload.updatedAt > payload.updatedAt)) {
               _context0.n = 2;
               break;
             }
-            _context0.n = 1;
+            conflictErr = new Error("この実績は、あなたが最後に確認した後に、会社側で更新されています。最新の内容をご確認のうえ、必要であれば入力し直してください。");
+            conflictErr.code = "CONFLICT";
+            conflictErr.serverPayload = serverPayload;
+            throw conflictErr;
+          case 2:
+            _context0.n = 3;
             return api.request(table, {
               method: 'PATCH',
               filter: "?id=eq.".concat(dbId),
@@ -2101,10 +2202,48 @@ var api = {
                 payload: payload
               }
             });
-          case 1:
+          case 3:
             return _context0.a(2, dbId);
-          case 2:
-            _context0.n = 3;
+          case 4:
+            // dbId が分からない場合は、業務IDで既存行を検索する
+            // （通信失敗と判定された再送で dbId を見失っているケースの
+            // 二重登録防止。詳しい理由は元のコメントを参照）。
+            _context0.n = 5;
+            return api.request(table, {
+              filter: "?tenant_id=eq.".concat(tenantId, "&payload->>id=eq.").concat(encodeURIComponent(payload.id), "&select=id,payload")
+            }).catch(function () {
+              return [];
+            });
+          case 5:
+            existing = _context0.v;
+            if (!(existing && existing.length > 0)) {
+              _context0.n = 8;
+              break;
+            }
+            // 【重要・不具合修正】業務IDで見つかった既存行についても、
+            // dbId指定時と同じ理由で、上書き前に更新日時を比較する。
+            serverPayload = existing[0].payload;
+            if (!(serverPayload && serverPayload.updatedAt && payload.updatedAt && serverPayload.updatedAt > payload.updatedAt)) {
+              _context0.n = 6;
+              break;
+            }
+            conflictErr = new Error("この実績は、あなたが最後に確認した後に、会社側で更新されています。最新の内容をご確認のうえ、必要であれば入力し直してください。");
+            conflictErr.code = "CONFLICT";
+            conflictErr.serverPayload = serverPayload;
+            throw conflictErr;
+          case 6:
+            _context0.n = 7;
+            return api.request(table, {
+              method: 'PATCH',
+              filter: "?id=eq.".concat(existing[0].id),
+              body: {
+                payload: payload
+              }
+            });
+          case 7:
+            return _context0.a(2, existing[0].id);
+          case 8:
+            _context0.n = 9;
             return api.request(table, {
               method: 'POST',
               prefer: 'return=representation',
@@ -2113,7 +2252,7 @@ var api = {
                 payload: payload
               }
             });
-          case 3:
+          case 9:
             created = _context0.v;
             return _context0.a(2, created === null || created === void 0 || (_created$ = created[0]) === null || _created$ === void 0 ? void 0 : _created$.id);
         }
@@ -2200,6 +2339,67 @@ var api = {
         }
       }, _callee10);
     }))();
+  },
+  /**
+   * 【機能追加】事務員が発行した一時コードを使って、新しいパスワードを
+   * 設定する（初回設定・パスワードを忘れた場合の再設定の両方に使う）。
+   * コードが一致し、かつ有効期限内であることを必ず確認してから
+   * 更新する。使い終わったコードは、もう一度使われないよう
+   * 必ずクリアする（1回きりの使い捨てにする）。
+   */
+  setPasswordWithCode: function setPasswordWithCode(driverId, code, newPassword) {
+    return _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee10b() {
+      var data, row, now, hashed, err;
+      return _regenerator().w(function (_context10b) {
+        while (1) switch (_context10b.n) {
+          case 0:
+            _context10b.n = 1;
+            return api.request('driver_auth', {
+              filter: "?driver_id=eq.".concat(driverId.toUpperCase().trim(), "&select=id,reset_code,reset_code_expires_at")
+            });
+          case 1:
+            data = _context10b.v;
+            row = (data || [])[0];
+            if (row) {
+              _context10b.n = 2;
+              break;
+            }
+            err = new Error("ドライバーIDが見つかりません。会社にご確認ください。");
+            err.code = "NOT_FOUND";
+            throw err;
+          case 2:
+            if (!(!row.reset_code || row.reset_code !== code.trim())) {
+              _context10b.n = 3;
+              break;
+            }
+            err = new Error("コードが正しくありません。会社に発行してもらったコードをご確認ください。");
+            err.code = "CODE_MISMATCH";
+            throw err;
+          case 3:
+            now = new Date();
+            if (!(!row.reset_code_expires_at || new Date(row.reset_code_expires_at) < now)) {
+              _context10b.n = 4;
+              break;
+            }
+            err = new Error("コードの有効期限が切れています。会社に新しいコードを発行してもらってください。");
+            err.code = "CODE_EXPIRED";
+            throw err;
+          case 4:
+            _context10b.n = 5;
+            return hashPassword(driverId, newPassword);
+          case 5:
+            hashed = _context10b.v;
+            _context10b.n = 6;
+            return api.request('driver_auth', {
+              method: 'PATCH',
+              filter: "?id=eq.".concat(row.id),
+              body: { password_hash: hashed, reset_code: null, reset_code_expires_at: null }
+            });
+          case 6:
+            return _context10b.a(2, true);
+        }
+      }, _callee10b);
+    }))();
   }
 };
 
@@ -2235,9 +2435,18 @@ var LS = {
     }
   },
   set: function set(k, v) {
+    // 【重要・不具合修正】以前はここで失敗を握りつぶしていたため、
+    // 端末のストレージ容量が不足している場合（QuotaExceededError等）、
+    // 「通信を試みる前に、まずキューへ保存しておく」という、これまで
+    // 実装してきたすべてのデータ消失対策の前提が、静かに崩れて
+    // しまっていた。保存が実際に成功したかどうかを、呼び出し元が
+    // 確認できるようにする。
     try {
       storage.setItem(k, JSON.stringify(v));
-    } catch (_unused5) {}
+      return true;
+    } catch (_unused5) {
+      return false;
+    }
   },
   del: function del(k) {
     try {
@@ -2251,6 +2460,11 @@ var K_SHIFT = "hakolog_shift_v4";
 var K_PRECHECK_DRAFT = "hakolog_precheck_draft_v1";
 var K_READ = "hakolog_read_v4";
 var K_QUEUE = "hakolog_queue_v4";
+// 【機能追加】日報（乗務前・乗務後）専用のオフラインキュー。
+// 実績とは別のテーブル（shift_reports）に保存するため、
+// キューも独立させておく（混ざると、実績の再送処理が誤って
+// 日報のデータを送ってしまうような事故を防ぐため）。
+var K_QUEUE_SR = "hakolog_queue_sr_v1";
 
 /* ══════════════ 3. calc（ハコマネと完全一致させること） ══════════════ */
 
@@ -2391,16 +2605,34 @@ var calcPayout = function calcPayout(driver, records) {
     parking = 0,
     fuel = 0,
     otherAllowance = 0,
-    sales = 0;
+    sales = 0,
+    royaltyBaseSales = 0;
   list.forEach(function (r) {
     sales += num(r.salesAmount);
+    // 【重要・不具合修正】以前はここで royaltyBaseSales の計算を
+    // 一切行わず、単純に sales（全売上）でロイヤリティを計算していた。
+    // しかしハコマネ側（calcDriverPayout）は、受注ごとに個別で報酬額を
+    // 決めた実績（fixedDriverPay）を、ロイヤリティの計算対象から除外
+    // している（既に会社の取り分が確保されているため、二重に取らない
+    // ようにする仕組み）。
+    // ここにこの除外ロジックが無かったため、fixedDriverPay の実績が
+    // ある月は、ハコログの画面がロイヤリティを多めに計算してしまい、
+    // 「実際の振込額より少ない金額」をドライバーに表示してしまう
+    // 不一致があった（実際に数値で検証・確認した）。
+    if (!r.fixedDriverPay) royaltyBaseSales += num(r.salesAmount);
     charter += num(r.charterDriver);
     highway += num(r.highwayFee);
     parking += num(r.parkingFee);
     fuel += num(r.fuelAllowance);
     otherAllowance += num(r.otherAllowance);
     var addOns = num(r.charterDriver) + num(r.highwayFee) + num(r.parkingFee) + num(r.fuelAllowance) + num(r.otherAllowance);
-    baseReward += num(r.driverAmount) - addOns;
+    // 【重要・不具合修正】差し引いた結果がマイナスになるのは、
+    // データの前提が崩れている状態（本来 driverAmount には加算項目が
+    // 含まれているはず）。ハコマネ側はこの場合 driverAmount をそのまま
+    // 使う安全策を取っているのに、ハコログ側にはこの保護が無く、
+    // 同じデータで違う計算結果になる可能性があった。ハコマネと揃える。
+    var base = num(r.driverAmount) - addOns;
+    baseReward += base < 0 ? num(r.driverAmount) : base;
   });
   var workDays = new Set(list.map(function (r) {
     return r.date;
@@ -2412,7 +2644,7 @@ var calcPayout = function calcPayout(driver, records) {
 
   // ロイヤリティ
   var royalty = 0;
-  if ((cfg === null || cfg === void 0 ? void 0 : cfg.royaltyType) === "fixed") royalty = num(cfg.royaltyFixed);else if ((cfg === null || cfg === void 0 ? void 0 : cfg.royaltyType) === "none") royalty = 0;else royalty = Math.round(sales * (num(cfg === null || cfg === void 0 ? void 0 : cfg.royaltyRate) / 100));
+  if ((cfg === null || cfg === void 0 ? void 0 : cfg.royaltyType) === "fixed") royalty = num(cfg.royaltyFixed);else if ((cfg === null || cfg === void 0 ? void 0 : cfg.royaltyType) === "none") royalty = 0;else royalty = Math.round(royaltyBaseSales * (num(cfg === null || cfg === void 0 ? void 0 : cfg.royaltyRate) / 100));
 
   // 稼働がゼロの月は定額控除もロイヤリティも発生させない
   var hasWork = workDays > 0;
@@ -2424,7 +2656,18 @@ var calcPayout = function calcPayout(driver, records) {
   var otherDeduction = hasWork ? num(cfg === null || cfg === void 0 ? void 0 : cfg.otherDeductionMonthly) : 0;
   var totalDeduction = royalty + lease + insurance + uniform + supplies + otherDeduction;
   // 振込額は必ず整数（円）。小数のままだと銀行データが作れない。
-  var netPay = Math.round(grossPay - totalDeduction);
+  // 【重要】ハコマネ側は「インボイス登録済み＋消費税を上乗せして支払う契約」の
+  // ドライバーに対し、報酬に消費税を加えた金額を振り込む。
+  // ハコログ側の計算にこれが入っていないと、ドライバーが見る「振込予定額」と
+  // 実際に振り込まれる額が食い違い、問い合わせ・不信感の原因になる。
+  // 必ずハコマネ側（calcDriverPayout）と同じ計算にすること。
+  var payTaxIncluded = !!(driver && driver.invoiceRegistered && driver.payTaxIncluded);
+  // 【重要】消費税率は1箇所で定義する。ハコマネ側の TAX_RATE と必ず同じ値にすること。
+  // ここだけ違う値になると、ドライバーが見る振込予定額と、
+  // 会社が実際に振り込む額が食い違う。
+  var HAKOLOG_TAX_RATE = 0.1;
+  var consumptionTax = payTaxIncluded ? Math.round(grossPay * HAKOLOG_TAX_RATE) : 0;
+  var netPay = Math.round(grossPay + consumptionTax - totalDeduction);
   return {
     workDays: workDays,
     totalCount: totalCount,
@@ -2436,6 +2679,7 @@ var calcPayout = function calcPayout(driver, records) {
     fuel: Math.round(fuel),
     otherAllowance: Math.round(otherAllowance),
     grossPay: Math.round(grossPay),
+    consumptionTax: consumptionTax,
     royalty: Math.round(royalty),
     lease: Math.round(lease),
     insurance: Math.round(insurance),
@@ -2658,6 +2902,34 @@ var Card = function Card(_ref8) {
   }, children);
 };
 
+/** 【機能追加】画面上部の共通ヘッダー（タイトル＋戻るボタン）。
+    「実績・報酬・予定・その他」等の画面に、タイトル表示も戻る手段も
+    無かったため、共通部品として切り出す。onBack を渡すと左に「‹」の
+    戻るボタンが表示される。渡さない場合はタイトルだけを表示する
+    （タブバーの一番上の階層の画面など、戻る先が無い場合用）。 */
+var ScreenHeader = function ScreenHeader(_ref8h) {
+  var title = _ref8h.title,
+    onBack = _ref8h.onBack;
+  return /*#__PURE__*/React.createElement("div", {
+    className: "bg-white border-b border-gray-200 px-2 py-2.5 flex items-center gap-1 flex-shrink-0"
+  }, onBack && /*#__PURE__*/React.createElement("button", {
+    onClick: onBack,
+    className: "p-1.5 -ml-1 min-h-0 text-gray-500 active:text-gray-800"
+  }, /*#__PURE__*/React.createElement("svg", {
+    viewBox: "0 0 24 24",
+    className: "w-6 h-6",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2.5",
+    strokeLinecap: "round",
+    strokeLinejoin: "round"
+  }, /*#__PURE__*/React.createElement("path", {
+    d: "M15 18l-6-6 6-6"
+  }))), /*#__PURE__*/React.createElement("p", {
+    className: "text-base font-black text-gray-900 px-1.5"
+  }, title));
+};
+
 /** 棒グラフ（外部ライブラリ不要。CDN追加でビルドが壊れるリスクを避ける） */
 var Bars = function Bars(_ref9) {
   var data = _ref9.data,
@@ -2705,7 +2977,8 @@ var Bars = function Bars(_ref9) {
 
 /* ---------- ログイン ---------- */
 function LoginScreen(_ref0) {
-  var onLogin = _ref0.onLogin;
+  var onLogin = _ref0.onLogin,
+    onGoToReset = _ref0.onGoToReset;
   var _useState3 = useState(""),
     _useState4 = _slicedToArray(_useState3, 2),
     driverId = _useState4[0],
@@ -2871,7 +3144,10 @@ function LoginScreen(_ref0) {
     onClick: submit,
     disabled: loading,
     className: "w-full rounded-xl py-4 font-bold text-base text-white ".concat(loading ? "bg-teal-300" : "bg-teal-500")
-  }, loading ? "ログイン中..." : "ログイン")), LOCAL_MODE ? /*#__PURE__*/React.createElement("div", {
+  }, loading ? "ログイン中..." : "ログイン"), /*#__PURE__*/React.createElement("button", {
+    onClick: onGoToReset,
+    className: "w-full text-center text-sm font-bold text-teal-600 py-1 min-h-0"
+  }, "初めての方／パスワードをお忘れの方はこちら")), LOCAL_MODE ? /*#__PURE__*/React.createElement("div", {
     className: "w-full bg-amber-50 border border-amber-300 rounded-xl px-4 py-3"
   }, /*#__PURE__*/React.createElement("p", {
     className: "text-[11px] font-bold text-amber-800 mb-1"
@@ -3387,6 +3663,192 @@ function _sendPreCheckToServer() {
   }));
   return _sendPreCheckToServer.apply(this, arguments);
 }
+/** 【機能追加】パスワードの初回設定・再設定画面。
+    事務員から伝えられた一時コードを使って、ドライバー自身が
+    新しいパスワードを設定する。 */
+function ResetPasswordScreen(_ref0b) {
+  var onDone = _ref0b.onDone,
+    onBack = _ref0b.onBack;
+  var _useStateRP1 = useState(""),
+    _useStateRP1b = _slicedToArray(_useStateRP1, 2),
+    driverId = _useStateRP1b[0],
+    setDriverId = _useStateRP1b[1];
+  var _useStateRP2 = useState(""),
+    _useStateRP2b = _slicedToArray(_useStateRP2, 2),
+    code = _useStateRP2b[0],
+    setCode = _useStateRP2b[1];
+  var _useStateRP3 = useState(""),
+    _useStateRP3b = _slicedToArray(_useStateRP3, 2),
+    pw1 = _useStateRP3b[0],
+    setPw1 = _useStateRP3b[1];
+  var _useStateRP4 = useState(""),
+    _useStateRP4b = _slicedToArray(_useStateRP4, 2),
+    pw2 = _useStateRP4b[0],
+    setPw2 = _useStateRP4b[1];
+  var _useStateRP5 = useState(false),
+    _useStateRP5b = _slicedToArray(_useStateRP5, 2),
+    loading = _useStateRP5b[0],
+    setLoading = _useStateRP5b[1];
+  var _useStateRP6 = useState(""),
+    _useStateRP6b = _slicedToArray(_useStateRP6, 2),
+    error = _useStateRP6b[0],
+    setError = _useStateRP6b[1];
+  var _useStateRP7 = useState(false),
+    _useStateRP7b = _slicedToArray(_useStateRP7, 2),
+    done = _useStateRP7b[0],
+    setDone = _useStateRP7b[1];
+
+  var submit = /*#__PURE__*/function () {
+    var _ref0c = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee0b() {
+      var _t;
+      return _regenerator().w(function (_context0b) {
+        while (1) switch (_context0b.n) {
+          case 0:
+            // 【不具合修正】disabled属性だけに頼ると、Enterキーの連打で
+            // onKeyDown経由の呼び出しが disabled を回避してしまう
+            // （このセッションで何度も見つけてきた問題と同じパターン）。
+            // 処理中は必ずここで弾く。
+            if (!loading) {
+              _context0b.n = 1;
+              break;
+            }
+            return _context0b.a(2);
+          case 1:
+            setError("");
+            if (driverId.trim()) {
+              _context0b.n = 2;
+              break;
+            }
+            setError("ドライバーIDを入力してください");
+            return _context0b.a(2);
+          case 2:
+            if (code.trim()) {
+              _context0b.n = 3;
+              break;
+            }
+            setError("会社から伝えられたコードを入力してください");
+            return _context0b.a(2);
+          case 3:
+            if (!(pw1.length < 4)) {
+              _context0b.n = 4;
+              break;
+            }
+            setError("パスワードは4文字以上にしてください");
+            return _context0b.a(2);
+          case 4:
+            if (!(pw1 !== pw2)) {
+              _context0b.n = 5;
+              break;
+            }
+            setError("新しいパスワード（確認）が一致しません");
+            return _context0b.a(2);
+          case 5:
+            setLoading(true);
+            _context0b.p = 6;
+            _context0b.n = 7;
+            return api.setPasswordWithCode(driverId.trim(), code.trim(), pw1);
+          case 7:
+            setDone(true);
+            _context0b.n = 9;
+            break;
+          case 8:
+            _context0b.p = 8;
+            _t = _context0b.v;
+            setError(_t.message || "設定に失敗しました");
+          case 9:
+            setLoading(false);
+            return _context0b.a(2);
+        }
+      }, _callee0b, null, [[6, 8]]);
+    }));
+    return function submit() {
+      return _ref0c.apply(this, arguments);
+    };
+  }();
+
+  if (done) {
+    return /*#__PURE__*/React.createElement("div", {
+      className: "flex-1 flex flex-col items-center justify-center px-8 text-center gap-4 bg-gray-50"
+    }, /*#__PURE__*/React.createElement("p", {
+      className: "text-5xl"
+    }, "\u2705"), /*#__PURE__*/React.createElement("p", {
+      className: "text-lg font-black text-gray-800"
+    }, "\u30D1\u30B9\u30EF\u30FC\u30C9\u3092\u8A2D\u5B9A\u3057\u307E\u3057\u305F"), /*#__PURE__*/React.createElement("p", {
+      className: "text-sm text-gray-500"
+    }, "\u3053\u306E\u30D1\u30B9\u30EF\u30FC\u30C9\u3067\u30ED\u30B0\u30A4\u30F3\u3067\u304D\u307E\u3059"), /*#__PURE__*/React.createElement("button", {
+      onClick: onDone,
+      className: "w-full max-w-xs rounded-xl py-3.5 font-bold text-white bg-teal-500"
+    }, "\u30ED\u30B0\u30A4\u30F3\u753B\u9762\u3078"));
+  }
+
+  return /*#__PURE__*/React.createElement("div", {
+    className: "flex-1 flex flex-col bg-gray-50"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "bg-white border-b border-gray-200 px-2 py-2.5 flex items-center gap-1 flex-shrink-0"
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: onBack,
+    className: "p-1.5 -ml-1 min-h-0 text-gray-500"
+  }, /*#__PURE__*/React.createElement("svg", {
+    viewBox: "0 0 24 24",
+    className: "w-6 h-6",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2.5",
+    strokeLinecap: "round",
+    strokeLinejoin: "round"
+  }, /*#__PURE__*/React.createElement("path", {
+    d: "M15 18l-6-6 6-6"
+  }))), /*#__PURE__*/React.createElement("p", {
+    className: "text-base font-black text-gray-900 px-1.5"
+  }, "\u30D1\u30B9\u30EF\u30FC\u30C9\u306E\u8A2D\u5B9A")), /*#__PURE__*/React.createElement("div", {
+    className: "flex-1 overflow-y-auto px-6 py-5 flex flex-col gap-3"
+  }, /*#__PURE__*/React.createElement("p", {
+    className: "text-xs text-gray-500 leading-relaxed"
+  }, "\u4F1A\u793E\u306B\u767A\u884C\u3057\u3066\u3082\u3089\u3063\u305F\u30B3\u30FC\u30C9\u3092\u5165\u529B\u3057\u3066\u3001\u65B0\u3057\u3044\u30D1\u30B9\u30EF\u30FC\u30C9\u3092\u8A2D\u5B9A\u3057\u3066\u304F\u3060\u3055\u3044\u3002"), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "text-xs font-bold text-gray-500 mb-1 block"
+  }, "\u30C9\u30E9\u30A4\u30D0\u30FCID"), /*#__PURE__*/React.createElement("input", {
+    type: "text",
+    value: driverId,
+    onChange: function onChange(e) { return setDriverId(e.target.value); },
+    placeholder: "\u4F8B\uFF1AD001",
+    className: "w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-base focus:outline-none focus:border-teal-500"
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "text-xs font-bold text-gray-500 mb-1 block"
+  }, "\u4F1A\u793E\u304B\u3089\u306E\u30B3\u30FC\u30C9\uFF086\u6841\uFF09"), /*#__PURE__*/React.createElement("input", {
+    type: "text",
+    inputMode: "numeric",
+    value: code,
+    onChange: function onChange(e) { return setCode(e.target.value); },
+    placeholder: "\u4F8B\uFF1A123456",
+    className: "w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-base tracking-widest focus:outline-none focus:border-teal-500"
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "text-xs font-bold text-gray-500 mb-1 block"
+  }, "\u65B0\u3057\u3044\u30D1\u30B9\u30EF\u30FC\u30C9"), /*#__PURE__*/React.createElement("input", {
+    type: "password",
+    value: pw1,
+    onChange: function onChange(e) { return setPw1(e.target.value); },
+    placeholder: "4\u6587\u5B57\u4EE5\u4E0A",
+    className: "w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-base focus:outline-none focus:border-teal-500"
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "text-xs font-bold text-gray-500 mb-1 block"
+  }, "\u65B0\u3057\u3044\u30D1\u30B9\u30EF\u30FC\u30C9\uFF08\u78BA\u8A8D\uFF09"), /*#__PURE__*/React.createElement("input", {
+    type: "password",
+    value: pw2,
+    onChange: function onChange(e) { return setPw2(e.target.value); },
+    onKeyDown: function onKeyDown(e) { return e.key === "Enter" && submit(); },
+    placeholder: "\u3082\u3046\u4E00\u5EA6\u5165\u529B",
+    className: "w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-base focus:outline-none focus:border-teal-500"
+  })), error && /*#__PURE__*/React.createElement("div", {
+    className: "bg-red-50 border border-red-200 rounded-xl px-4 py-3"
+  }, /*#__PURE__*/React.createElement("p", {
+    className: "text-red-600 text-sm font-medium"
+  }, error)), /*#__PURE__*/React.createElement("button", {
+    onClick: submit,
+    disabled: loading,
+    className: "w-full rounded-xl py-4 font-bold text-base text-white ".concat(loading ? "bg-teal-300" : "bg-teal-500")
+  }, loading ? "\u8A2D\u5B9A\u4E2D..." : "\u30D1\u30B9\u30EF\u30FC\u30C9\u3092\u8A2D\u5B9A")));
+}
+
 function HomeScreen(_ref12) {
   var driver = _ref12.driver,
     profile = _ref12.profile,
@@ -3394,12 +3856,14 @@ function HomeScreen(_ref12) {
     jobTypes = _ref12.jobTypes,
     notices = _ref12.notices,
     shift = _ref12.shift,
+    shiftReports = _ref12.shiftReports,
     onShiftChange = _ref12.onShiftChange,
     onNav = _ref12.onNav,
     onOpenEntry = _ref12.onOpenEntry,
     unread = _ref12.unread,
     offline = _ref12.offline,
     syncing = _ref12.syncing,
+    pendingCount = _ref12.pendingCount,
     company = _ref12.company;
   var _useState23 = useState(new Date()),
     _useState24 = _slicedToArray(_useState23, 2),
@@ -3450,6 +3914,16 @@ function HomeScreen(_ref12) {
   var started = !!shift.startAt && !shift.endAt;
   var finished = !!shift.endAt;
 
+  // 【機能追加】乗務前日報・乗務後日報が、今回の勤務ぶん提出済みかどうかを判定する。
+  // ShiftReportScreen と同じ基準（shift.date を使う。日をまたぐ夜間勤務でも
+  // 乗務前・乗務後が同じレコードとして扱われるようにするため）で揃える。
+  var shiftReportToday = (shiftReports || []).find(function (r) {
+    return r.date === ((shift && shift.date) || today) && r.driverId === (driver && driver.driverRecordId);
+  }) || null;
+  var preReportDone = !!(shiftReportToday && shiftReportToday.preSubmittedAt);
+  var postReportDone = !!(shiftReportToday && shiftReportToday.postSubmittedAt);
+  var entryDone = todayRecs.length > 0;
+
   // 点検だけ記録する（稼働開始はしない）。
   // 「乗務前点検をする（任意）」から呼ばれる。
   var recordPreCheck = function recordPreCheck(preCheck) {
@@ -3495,9 +3969,7 @@ function HomeScreen(_ref12) {
   }, /*#__PURE__*/React.createElement("div", {
     className: "bg-white border-b border-gray-200 px-4 py-2.5 flex items-center justify-between flex-shrink-0"
   }, /*#__PURE__*/React.createElement(Logo, null), /*#__PURE__*/React.createElement("button", {
-    onClick: function onClick() {
-      return onNav("notices");
-    },
+    onClick: function onClick() { return onNav("notices"); },
     className: "relative p-1 min-h-0"
   }, /*#__PURE__*/React.createElement(Bell, null), unread > 0 && /*#__PURE__*/React.createElement("span", {
     className: "absolute -top-0.5 -right-0.5 bg-red-500 text-white text-[10px] font-bold rounded-full w-4 h-4 flex items-center justify-center"
@@ -3509,9 +3981,20 @@ function HomeScreen(_ref12) {
     className: "bg-teal-50 border-b border-teal-200 px-4 py-1.5 text-center flex-shrink-0"
   }, /*#__PURE__*/React.createElement("p", {
     className: "text-[11px] text-teal-700 font-bold"
-  }, "\u21BB \u4F1A\u793E\u3068\u540C\u671F\u3057\u3066\u3044\u307E\u3059\u2026")), /*#__PURE__*/React.createElement("div", {
-    className: "flex-1 overflow-y-auto px-4 py-2.5 flex flex-col gap-2"
-  }, /*#__PURE__*/React.createElement("div", {
+  }, "\u21BB \u4F1A\u793E\u3068\u540C\u671F\u3057\u3066\u3044\u307E\u3059\u2026")),
+  // 【機能追加・監査で発見】「未送信のデータが何件溜まっているか」を
+  // ドライバーが確認する手段が無かった。オフライン中に限らず、常に
+  // pendingCount を見せることで、「保存したつもりが実は会社に
+  // まだ届いていない」ことに、本人がその場で気づけるようにする。
+  !offline && !syncing && pendingCount > 0 && /*#__PURE__*/React.createElement("div", {
+    className: "bg-amber-50 border-b border-amber-300 px-4 py-1.5 text-center flex-shrink-0"
+  }, /*#__PURE__*/React.createElement("p", {
+    className: "text-[11px] text-amber-700 font-bold"
+  }, "\u26A0 \u672A\u9001\u4FE1\u306E\u30C7\u30FC\u30BF\u304C".concat(pendingCount, "\u4EF6\u3042\u308A\u307E\u3059\u3002\u96FB\u6CE2\u306E\u826F\u3044\u5834\u6240\u3067\u30A2\u30D7\u30EA\u3092\u958B\u3044\u305F\u307E\u307E\u306B\u3057\u3066\u304A\u3044\u3066\u304F\u3060\u3055\u3044"))), /*#__PURE__*/React.createElement("div", {
+    className: "flex-1 overflow-y-auto px-4 py-2 flex flex-col gap-1.5"
+  },
+  /* 日付 */
+  /*#__PURE__*/React.createElement("div", {
     className: "text-center"
   }, /*#__PURE__*/React.createElement("p", {
     className: "text-lg font-black text-gray-900"
@@ -3519,173 +4002,112 @@ function HomeScreen(_ref12) {
     className: "text-sm text-gray-400 font-medium ml-2"
   }, todayJP.dow)), driver && /*#__PURE__*/React.createElement("p", {
     className: "text-xs text-teal-600 font-bold mt-0.5"
-  }, driver.driverName)), /*#__PURE__*/React.createElement(Card, {
-    className: "overflow-hidden shadow-sm"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "bg-gradient-to-br from-teal-500 to-teal-600 px-5 py-3.5"
-  }, /*#__PURE__*/React.createElement("p", {
-    className: "text-teal-100 text-xs font-bold mb-1"
-  }, "\u4ECA\u65E5\u306E\u5831\u916C"), /*#__PURE__*/React.createElement("p", {
-    className: "text-white text-4xl font-black leading-none"
-  }, yen(todayPay)), /*#__PURE__*/React.createElement("p", {
-    className: "text-teal-100 text-xs mt-2"
-  }, "\u5B8C\u4E86 ", todayCount.toLocaleString(), "\u500B / ", todayRecs.length, "\u4EF6\u306E\u5B9F\u7E3E")), /*#__PURE__*/React.createElement("div", {
-    className: "flex divide-x divide-gray-100"
-  }, /*#__PURE__*/React.createElement(Stat, {
-    label: "\u4ECA\u6708",
-    value: yen(payout.grossPay)
-  }), /*#__PURE__*/React.createElement(Stat, {
-    label: "\u63A7\u9664\u5F8C\u306E\u632F\u8FBC\u4E88\u5B9A",
-    value: payout.isNegative ? yen(0) : yen(payout.netPay),
-    sub: "\u7A3C\u50CD ".concat(payout.workDays, "\u65E5")
-  })), payout.draftCount > 0 && /*#__PURE__*/React.createElement("div", {
-    className: "bg-gray-50 border-t border-gray-200 px-4 py-2.5 flex items-center justify-between"
-  }, /*#__PURE__*/React.createElement("p", {
-    className: "text-[11px] text-gray-600 font-bold"
-  }, "\uD83D\uDCDD \u672A\u7533\u8ACB\u306E\u5B9F\u7E3E\u304C ", payout.draftCount, "\u4EF6 \u3042\u308A\u307E\u3059"), /*#__PURE__*/React.createElement("button", {
-    onClick: function onClick() {
-      return onNav("sales");
-    },
-    className: "text-[11px] text-teal-600 font-bold min-h-0"
-  }, "\u7533\u8ACB\u3059\u308B \u203A")), payout.rejectedCount > 0 && /*#__PURE__*/React.createElement("div", {
-    className: "bg-red-50 border-t border-red-200 px-4 py-2.5 flex items-center justify-between"
-  }, /*#__PURE__*/React.createElement("p", {
-    className: "text-[11px] text-red-700 font-bold"
-  }, "\u26A0 \u5DEE\u3057\u623B\u3055\u308C\u305F\u5B9F\u7E3E\u304C ", payout.rejectedCount, "\u4EF6 \u3042\u308A\u307E\u3059"), /*#__PURE__*/React.createElement("button", {
-    onClick: function onClick() {
-      return onNav("sales");
-    },
-    className: "text-[11px] text-red-600 font-bold min-h-0"
-  }, "\u4FEE\u6B63\u3059\u308B \u203A")), payout.submittedCount > 0 && /*#__PURE__*/React.createElement("div", {
-    className: "bg-amber-50 border-t border-amber-200 px-4 py-2.5"
-  }, /*#__PURE__*/React.createElement("p", {
-    className: "text-[11px] text-amber-700"
-  }, "\u23F3 \u627F\u8A8D\u5F85\u3061 ", payout.submittedCount, "\u4EF6\uFF08+", yen(payout.pendingAmount), "\uFF09\u2014 \u627F\u8A8D\u3055\u308C\u308B\u3068\u5831\u916C\u306B\u52A0\u7B97\u3055\u308C\u307E\u3059"))), /*#__PURE__*/React.createElement(Card, {
-    className: "px-4 py-3"
-  }, /*#__PURE__*/React.createElement("p", {
-    className: "text-[11px] text-gray-400 font-bold mb-1.5"
-  }, "\u62C5\u5F53"), mainRoute ? /*#__PURE__*/React.createElement("div", {
-    className: "flex items-center gap-2 flex-wrap"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "bg-teal-50 text-teal-700 text-xs font-bold px-2.5 py-1 rounded-lg"
-  }, mainRoute.customerName || "案件未設定"), /*#__PURE__*/React.createElement("span", {
-    className: "text-gray-300"
-  }, "/"), /*#__PURE__*/React.createElement("span", {
-    className: "text-sm font-bold text-gray-800"
-  }, mainRoute.routeName || "コース未設定"), routes.length > 1 && /*#__PURE__*/React.createElement("span", {
-    className: "text-[11px] text-gray-400"
-  }, "\u4ED6", routes.length - 1, "\u4EF6")) : /*#__PURE__*/React.createElement("p", {
-    className: "text-sm text-gray-400"
-  }, "\u62C5\u5F53\u6848\u4EF6\u304C\u672A\u8A2D\u5B9A\u3067\u3059\u3002\u4F1A\u793E\u306B\u3054\u78BA\u8A8D\u304F\u3060\u3055\u3044\u3002")), !started && /*#__PURE__*/React.createElement("div", {
-    className: "flex flex-col gap-2"
-  }, /*#__PURE__*/React.createElement("button", {
-    onClick: function onClick() {
-      return onShiftChange({
-        startAt: new Date().toISOString(),
-        endAt: null,
-        preCheck: shift.preCheck || null
-      });
-    },
-    className: "w-full bg-teal-500 text-white font-black text-xl rounded-2xl py-4 shadow-md active:bg-teal-600"
-  }, finished ? "稼働を再開する" : "稼働開始"), /*#__PURE__*/React.createElement("button", {
-    onClick: function onClick() {
-      return setPreCheckOpen(true);
-    },
-    className: "w-full border-2 border-teal-500 text-teal-600 font-bold text-sm rounded-xl py-3 bg-white"
-  }, shift.preCheck ? "✓ アルコール・点検 済み" : "アルコールチェック・乗務前点検"), /*#__PURE__*/React.createElement("button", {
-    onClick: onOpenEntry,
-    className: "w-full border-2 border-gray-300 text-gray-600 font-bold text-sm rounded-xl py-3 bg-white"
-  }, "\uFF0B \u914D\u9001\u5B9F\u7E3E\u3092\u5165\u529B")), started && /*#__PURE__*/React.createElement(Card, {
+  }, driver.driverName)),
+
+  /* ===== 稼働前：乗務前日報 → 稼働開始（乗務前日報が未提出だと押せない） ===== */
+  !started && !finished && /*#__PURE__*/React.createElement(React.Fragment, null,
+    /*#__PURE__*/React.createElement("button", {
+      onClick: function onClick() { return onNav("shift-report-pre"); },
+      className: "w-full text-left rounded-xl border-2 px-3.5 py-2.5 flex items-center justify-between ".concat(preReportDone ? "border-teal-200 bg-teal-50" : "border-amber-300 bg-amber-50")
+    }, /*#__PURE__*/React.createElement("div", null,
+      /*#__PURE__*/React.createElement("p", {
+        className: "text-sm font-bold ".concat(preReportDone ? "text-teal-700" : "text-amber-700")
+      }, "\uD83D\uDE9B \u4E57\u52D9\u524D\u65E5\u5831"),
+      /*#__PURE__*/React.createElement("p", {
+        className: "text-[11px] mt-0.5 ".concat(preReportDone ? "text-teal-500" : "text-amber-600")
+      }, preReportDone ? "\u2713 \u63D0\u51FA\u6E08\u307F" : "\u7A3C\u50CD\u958B\u59CB\u306B\u306F\u63D0\u51FA\u304C\u5FC5\u8981\u3067\u3059")
+    ), /*#__PURE__*/React.createElement("span", {
+      className: "text-lg ".concat(preReportDone ? "text-teal-500" : "text-amber-500")
+    }, preReportDone ? "\u2713" : "\u203A")),
+    /*#__PURE__*/React.createElement("button", {
+      disabled: !preReportDone,
+      onClick: function onClick() {
+        return onShiftChange({
+          startAt: new Date().toISOString(),
+          endAt: null,
+          preCheck: shift.preCheck || null
+        });
+      },
+      className: "w-full font-black text-lg rounded-xl py-3 shadow-md ".concat(preReportDone ? "bg-teal-500 text-white active:bg-teal-600" : "bg-gray-200 text-gray-400")
+    }, "\u7A3C\u50CD\u958B\u59CB"),
+    !preReportDone && /*#__PURE__*/React.createElement("p", {
+      className: "text-[11px] text-gray-400 text-center -mt-1"
+    }, "\u4E57\u52D9\u524D\u65E5\u5831\u3092\u63D0\u51FA\u3059\u308B\u3068\u7A3C\u50CD\u3092\u958B\u59CB\u3067\u304D\u307E\u3059")
+  ),
+
+  /* ===== 稼働中：乗務後日報 → 配送実績入力 → 稼働終了（両方確定しないと押せない） ===== */
+  started && /*#__PURE__*/React.createElement(Card, {
     className: "overflow-hidden"
   }, /*#__PURE__*/React.createElement("div", {
-    className: "px-4 py-3 flex items-center justify-between bg-teal-50 border-b border-teal-100"
+    className: "px-3.5 py-2 flex items-center justify-between bg-teal-50 border-b border-teal-100"
   }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("p", {
     className: "text-[11px] text-teal-600 font-bold"
   }, "\u7A3C\u50CD\u4E2D"), /*#__PURE__*/React.createElement("p", {
     className: "text-sm font-bold text-gray-800"
-  }, fmtTime(shift.startAt), " \u301C"), shift.preCheck && /*#__PURE__*/React.createElement("p", {
-    className: "text-[10px] text-teal-600 mt-0.5"
-  }, "\u2713 \u4E57\u52D9\u524D\u70B9\u691C\u6E08\u307F")), /*#__PURE__*/React.createElement("span", {
+  }, fmtTime(shift.startAt), " \u301C")), /*#__PURE__*/React.createElement("span", {
     className: "w-2.5 h-2.5 rounded-full bg-teal-500 animate-pulse"
   })), /*#__PURE__*/React.createElement("div", {
-    className: "p-3 flex flex-col gap-2"
-  }, /*#__PURE__*/React.createElement("button", {
+    className: "p-2.5 flex flex-col gap-1.5"
+  },
+  /*#__PURE__*/React.createElement("button", {
+    onClick: function onClick() { return onNav("shift-report-post"); },
+    className: "w-full text-left rounded-lg border-2 px-3.5 py-2 flex items-center justify-between ".concat(postReportDone ? "border-teal-200 bg-teal-50" : "border-gray-200 bg-white")
+  }, /*#__PURE__*/React.createElement("div", null,
+    /*#__PURE__*/React.createElement("p", {
+      className: "text-sm font-bold ".concat(postReportDone ? "text-teal-700" : "text-gray-700")
+    }, "\uD83D\uDE9B \u4E57\u52D9\u5F8C\u65E5\u5831"),
+    /*#__PURE__*/React.createElement("p", {
+      className: "text-[11px] mt-0.5 ".concat(postReportDone ? "text-teal-500" : "text-gray-400")
+    }, postReportDone ? "\u2713 \u63D0\u51FA\u6E08\u307F" : "\u7A3C\u50CD\u7D42\u4E86\u306B\u306F\u63D0\u51FA\u304C\u5FC5\u8981\u3067\u3059")
+  ), /*#__PURE__*/React.createElement("span", {
+    className: "text-lg ".concat(postReportDone ? "text-teal-500" : "text-gray-300")
+  }, postReportDone ? "\u2713" : "\u203A")),
+  /*#__PURE__*/React.createElement("button", {
     onClick: onOpenEntry,
-    className: "w-full bg-teal-500 text-white font-black text-lg rounded-xl py-4 active:bg-teal-600"
-  }, "\uFF0B \u914D\u9001\u5B9F\u7E3E\u3092\u5165\u529B"), /*#__PURE__*/React.createElement("div", {
-    className: "flex gap-2"
-  }, /*#__PURE__*/React.createElement("button", {
-    onClick: function onClick() {
-      return onNav("shift-report-pre");
-    },
-    className: "flex-1 bg-white border-2 border-teal-500 text-teal-600 font-bold text-sm rounded-xl py-3 flex items-center justify-center gap-1"
-  }, "\uD83D\uDE9B \u4E57\u52D9\u524D\u65E5\u5831"), /*#__PURE__*/React.createElement("button", {
-    onClick: function onClick() {
-      return onNav("shift-report-post");
-    },
-    className: "flex-1 bg-teal-500 text-white font-bold text-sm rounded-xl py-3 flex items-center justify-center gap-1"
-  }, "\uD83D\uDE9B \u4E57\u52D9\u5F8C\u65E5\u5831")), /*#__PURE__*/React.createElement("button", {
-    onClick: function onClick() {
-      return setConfirm("end");
-    },
-    className: "w-full bg-gray-700 text-white font-bold text-base rounded-xl py-3.5 active:bg-gray-800"
-  }, "\u7A3C\u50CD\u7D42\u4E86"))), finished && /*#__PURE__*/React.createElement(Card, {
-    className: "p-5 text-center bg-teal-50 border-teal-200"
+    className: "w-full text-left rounded-lg border-2 px-3.5 py-2 flex items-center justify-between ".concat(entryDone ? "border-teal-200 bg-teal-50" : "border-gray-200 bg-white")
+  }, /*#__PURE__*/React.createElement("div", null,
+    /*#__PURE__*/React.createElement("p", {
+      className: "text-sm font-bold ".concat(entryDone ? "text-teal-700" : "text-gray-700")
+    }, "\uFF0B \u914D\u9001\u5B9F\u7E3E\u5165\u529B"),
+    /*#__PURE__*/React.createElement("p", {
+      className: "text-[11px] mt-0.5 ".concat(entryDone ? "text-teal-500" : "text-gray-400")
+    }, entryDone ? "\u2713 ".concat(todayRecs.length, "\u4EF6\u5165\u529B\u6E08\u307F") : "\u7A3C\u50CD\u7D42\u4E86\u306B\u306F\u5165\u529B\u304C\u5FC5\u8981\u3067\u3059")
+  ), /*#__PURE__*/React.createElement("span", {
+    className: "text-lg ".concat(entryDone ? "text-teal-500" : "text-gray-300")
+  }, entryDone ? "\u2713" : "\u203A")),
+  /*#__PURE__*/React.createElement("button", {
+    disabled: !postReportDone || !entryDone,
+    onClick: function onClick() { return setConfirm("end"); },
+    className: "w-full font-bold text-sm rounded-lg py-2.5 ".concat(postReportDone && entryDone ? "bg-gray-700 text-white active:bg-gray-800" : "bg-gray-200 text-gray-400")
+  }, "\u7A3C\u50CD\u7D42\u4E86"),
+  (!postReportDone || !entryDone) && /*#__PURE__*/React.createElement("p", {
+    className: "text-[11px] text-gray-400 text-center"
+  }, "\u4E57\u52D9\u5F8C\u65E5\u5831\u3068\u914D\u9001\u5B9F\u7E3E\u5165\u529B\u3092\u5B8C\u4E86\u3059\u308B\u3068\u7A3C\u50CD\u3092\u7D42\u4E86\u3067\u304D\u307E\u3059")
+  )),
+
+  /* ===== 稼働終了後 ===== */
+  finished && /*#__PURE__*/React.createElement(Card, {
+    className: "p-4 text-center bg-teal-50 border-teal-200"
   }, /*#__PURE__*/React.createElement("p", {
     className: "text-teal-700 font-black text-xl"
   }, "\u304A\u75B2\u308C\u3055\u307E\u3067\u3057\u305F\uFF01"), /*#__PURE__*/React.createElement("p", {
     className: "text-teal-500 text-sm mt-1"
-  }, fmtTime(shift.startAt), " \u301C ", fmtTime(shift.endAt)), /*#__PURE__*/React.createElement("div", {
-    className: "flex gap-2 mt-3"
-  }, /*#__PURE__*/React.createElement("button", {
-    onClick: function onClick() {
-      return onNav("shift-report-pre");
-    },
-    className: "flex-1 bg-white border-2 border-teal-500 text-teal-600 font-bold text-sm rounded-xl py-3 flex items-center justify-center gap-1"
-  }, "\uD83D\uDE9B \u4E57\u52D9\u524D\u65E5\u5831"), /*#__PURE__*/React.createElement("button", {
-    onClick: function onClick() {
-      return onNav("shift-report-post");
-    },
-    className: "flex-1 bg-teal-500 text-white font-bold text-sm rounded-xl py-3 flex items-center justify-center gap-1"
-  }, "\uD83D\uDE9B \u4E57\u52D9\u5F8C\u65E5\u5831"))), todayRecs.length > 0 && /*#__PURE__*/React.createElement(Card, {
-    className: "overflow-hidden"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "px-4 py-2 bg-gray-50 border-b border-gray-100"
-  }, /*#__PURE__*/React.createElement("p", {
-    className: "text-xs font-bold text-gray-600"
-  }, "\u672C\u65E5\u306E\u5B9F\u7E3E")), todayRecs.map(function (r, i) {
-    var jt = jobTypes.find(function (j) {
-      return j.id === r.jobTypeId;
-    });
-    return /*#__PURE__*/React.createElement("div", {
-      key: r.id || i,
-      className: "px-4 py-2.5 flex items-center justify-between ".concat(i < todayRecs.length - 1 ? "border-b border-gray-100" : "")
-    }, /*#__PURE__*/React.createElement("div", {
-      className: "min-w-0 flex-1"
-    }, /*#__PURE__*/React.createElement("p", {
-      className: "text-sm font-bold text-gray-800 truncate"
-    }, (jt === null || jt === void 0 ? void 0 : jt.name) || "配送"), /*#__PURE__*/React.createElement("p", {
-      className: "text-[11px] text-gray-400"
-    }, num(r.count), "\u500B")), /*#__PURE__*/React.createElement("p", {
-      className: "text-base font-black text-teal-600 flex-shrink-0 ml-2"
-    }, yen(r.driverAmount)));
-  })), notices.length > 0 && /*#__PURE__*/React.createElement(Card, {
+  }, fmtTime(shift.startAt), " \u301C ", fmtTime(shift.endAt))),
+
+  /* お知らせ */
+  notices.length > 0 && /*#__PURE__*/React.createElement(Card, {
     className: "overflow-hidden"
   }, /*#__PURE__*/React.createElement("div", {
     className: "px-4 py-2 bg-gray-50 border-b border-gray-100 flex items-center justify-between"
   }, /*#__PURE__*/React.createElement("p", {
     className: "text-xs font-bold text-gray-600"
   }, "\u304A\u77E5\u3089\u305B"), /*#__PURE__*/React.createElement("button", {
-    onClick: function onClick() {
-      return onNav("notices");
-    },
+    onClick: function onClick() { return onNav("notices"); },
     className: "text-[11px] text-teal-600 font-bold min-h-0"
   }, "\u3059\u3079\u3066\u898B\u308B \u203A")), notices.slice(0, 1).map(function (n, i) {
     return /*#__PURE__*/React.createElement("div", {
       key: n.id || i,
-      onClick: function onClick() {
-        return onNav("notices");
-      },
+      onClick: function onClick() { return onNav("notices"); },
       className: "px-4 py-2.5 ".concat(!n.isRead ? "bg-teal-50/40" : "")
     }, /*#__PURE__*/React.createElement("div", {
       className: "flex items-center gap-1.5"
@@ -3700,17 +4122,13 @@ function HomeScreen(_ref12) {
     className: "h-2"
   })), preCheckOpen && /*#__PURE__*/React.createElement(PreCheckSheet, {
     onComplete: recordPreCheck,
-    onClose: function onClose() {
-      return setPreCheckOpen(false);
-    }
+    onClose: function onClose() { return setPreCheckOpen(false); }
   }), confirm === "end" && /*#__PURE__*/React.createElement(Confirm, {
     title: "\u7A3C\u50CD\u3092\u7D42\u4E86\u3057\u307E\u3059\u304B\uFF1F",
-    message: todayRecs.length === 0 ? "⚠️ 本日の配送実績がまだ入力されていません。\n実績を入れないと売上・報酬に反映されません。" : "\u672C\u65E5\u306E\u5831\u916C\uFF1A".concat(yen(todayPay)),
+    message: todayRecs.length === 0 ? "⚠️ 本日の配送実績がまだ入力されていません。\n実績を入れないと売上・報酬に反映されません。" : "\u672C\u65E5\u306E\u5B9F\u7E3E\uFF1A".concat(todayRecs.length, "\u4EF6"),
     confirmLabel: "\u7A3C\u50CD\u7D42\u4E86",
     onConfirm: doEnd,
-    onCancel: function onCancel() {
-      return setConfirm(null);
-    }
+    onCancel: function onCancel() { return setConfirm(null); }
   }));
 }
 
@@ -3811,12 +4229,36 @@ function EntrySheet(_ref14) {
             }
             return _context12.a(2);
           case 1:
-            setSaving(true);
+            // 【監査で発見・不具合修正】個数（配送個数）の異常値が、
+            // 何のチェックも無く、そのまま報酬・売上の計算に使われて
+            // いた。マイナス・英字混入・指数表記は既存の入力フィルタ
+            // （NumInputのonChange）で防がれていたが、以下は防げて
+            // いなかった：
+            //   ①個数に小数（例：2.5個）が入力できてしまう
+            //   ②桁数の異常な入力（例：入力ミスで0が何個も付いた場合）に
+            //     何の確認も無く、そのまま巨額の売上・報酬として計算される
+            // ブロックはせず、本人がその場で気づけるよう確認を挟む
+            // （距離・時間は小数が自然なので、個数（count）のときだけ
+            // 小数チェックを行う）。
+            if (pattern === "count" && form.count !== "" && !Number.isInteger(num(form.count))) {
+              if (!window.confirm("配送個数「".concat(form.count, "」に小数が含まれています。個数として正しいですか？"))) {
+                return _context12.a(2);
+              }
+            }
+            if (num(form[qtyKey]) >= 1000) {
+              if (!window.confirm("".concat(qtyLabel, "が「").concat(num(form[qtyKey]).toLocaleString(), "").concat(qtySuffix, "」と、かなり多い数値になっています。\n売上見込み：").concat(yen(amounts.salesAmount), "\n\n入力ミスではありませんか？このまま保存しますか？"))) {
+                return _context12.a(2);
+              }
+            }
             _context12.n = 2;
-            return onSave(_objectSpread(_objectSpread({}, form), amounts), mode);
+            break;
           case 2:
-            setSaving(false);
+            setSaving(true);
+            _context12.n = 3;
+            return onSave(_objectSpread(_objectSpread({}, form), amounts), mode);
           case 3:
+            setSaving(false);
+          case 4:
             return _context12.a(2);
         }
       }, _callee12);
@@ -4049,6 +4491,7 @@ function EntrySheet(_ref14) {
 function SalesScreen(_ref16) {
   var records = _ref16.records,
     onEdit = _ref16.onEdit,
+    onNav = _ref16.onNav,
     jobTypes = _ref16.jobTypes;
   var _useState37 = useState("month"),
     _useState38 = _slicedToArray(_useState37, 2),
@@ -4140,7 +4583,10 @@ function SalesScreen(_ref16) {
       className: "text-base font-black ".concat(active ? "text-teal-700" : "text-gray-800")
     }, yenShort(value)));
   };
-  return /*#__PURE__*/React.createElement("div", {
+  return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(ScreenHeader, {
+    title: "実績",
+    onBack: onNav ? function () { return onNav("home"); } : undefined
+  }), /*#__PURE__*/React.createElement("div", {
     className: "flex-1 overflow-y-auto bg-gray-50 px-4 py-3 flex flex-col gap-3"
   }, /*#__PURE__*/React.createElement("div", {
     className: "flex gap-2"
@@ -4198,6 +4644,20 @@ function SalesScreen(_ref16) {
     return /*#__PURE__*/React.createElement("div", {
       key: r.id || i,
       onClick: function onClick() {
+        // 【監査で発見・不具合修正】受注から自動連携された実績
+        // （fixedDriverPay=true、事務員が個別に金額を決めたもの）を
+        // ハコログから編集できてしまうと、その fixedDriverPay フラグが
+        // 編集フォームにそのまま引き継がれ、保存時にも一緒に
+        // 送信されてしまう。サーバー側の金額検証トリガーは、
+        // このフラグが立っている実績を「個別決定分だから」と判断して
+        // 再計算をスキップする設計のため、本来は通常の実績なのに
+        // 検証をすり抜けられる抜け道になってしまう。
+        // 受注由来の実績は、そもそもハコログからの編集対象外にする
+        // （金額を直すべき場合は、受注の内容を会社側で修正してもらう）。
+        if (r.fixedDriverPay) {
+          window.alert("この実績は受注から自動的に作成されたものです。内容の修正が必要な場合は、会社にご連絡ください。");
+          return;
+        }
         return onEdit(r);
       },
       className: "px-4 py-3 flex items-center justify-between active:bg-gray-50 ".concat(i < sorted.length - 1 ? "border-b border-gray-100" : "", " ").concat(st === APPROVAL.REJECTED ? "bg-red-50/40" : "")
@@ -4218,7 +4678,7 @@ function SalesScreen(_ref16) {
     }, yen(r.driverAmount))));
   })), /*#__PURE__*/React.createElement("div", {
     className: "h-6"
-  }));
+  })));
 }
 
 /* ---------- 報酬（概算・リアルタイム） ---------- */
@@ -4227,6 +4687,7 @@ function PayoutScreen(_ref20) {
     records = _ref20.records,
     invoices = _ref20.invoices,
     company = _ref20.company,
+    onNav = _ref20.onNav,
     onSubmitMonth = _ref20.onSubmitMonth;
   var _useState39 = useState(ym()),
     _useState40 = _slicedToArray(_useState39, 2),
@@ -4304,7 +4765,7 @@ function PayoutScreen(_ref20) {
     };
     var html = "<!DOCTYPE html><html lang=\"ja\"><head><meta charset=\"utf-8\"><title>\u8ACB\u6C42\u66F8 ".concat(esc(monthInvoice.id), "</title>\n<style>*{box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,'Hiragino Sans','Noto Sans JP',sans-serif;color:#222;margin:0;padding:20px;background:#f5f5f5}\n.sheet{max-width:640px;margin:0 auto;background:#fff;padding:32px;border-radius:6px}\n.bar{max-width:640px;margin:0 auto 12px;text-align:right}\n.bar button{padding:8px 18px;font-size:13px;font-weight:700;color:#fff;background:#14b8a6;border:none;border-radius:4px;cursor:pointer;font-family:inherit}\nh1{font-size:20px;text-align:center;letter-spacing:4px;margin:0 0 20px}\n.row{display:flex;justify-content:space-between;margin-bottom:20px;font-size:13px;line-height:1.8}\ntable{width:100%;border-collapse:collapse;margin:16px 0}th,td{border:1px solid #ddd;padding:8px 10px;font-size:13px}\nth{background:#f5f5f5;text-align:left}\n.totals{margin-left:auto;width:260px;font-size:13px}.totals div{display:flex;justify-content:space-between;padding:4px 0}\n.totals .grand{font-size:17px;font-weight:700;border-top:2px solid #222;margin-top:6px;padding-top:8px}\n.foot{margin-top:24px;text-align:center;font-size:11px;color:#999}\n@page{ size: A4; margin: 12mm; }\n@media print{body{background:#fff;padding:0}.bar{display:none}.sheet{max-width:100%;width:100%;padding:0;border-radius:0}}\n</style></head>\n<body>\n<div class=\"bar\"><button onclick=\"window.print()\">\u5370\u5237 / PDF\u4FDD\u5B58</button></div>\n<div class=\"sheet\">\n  <h1>\u8ACB \u6C42 \u66F8</h1>\n  <div class=\"row\">\n    <div>").concat(esc(monthInvoice.driverName), "<br/>").concat(monthInvoice.registered && monthInvoice.invoiceRegNo ? "\u767B\u9332\u756A\u53F7\uFF1A".concat(esc(monthInvoice.invoiceRegNo)) : "（適格請求書発行事業者登録なし）", "</div>\n    <div>\u8ACB\u6C42\u66F8\u756A\u53F7\uFF1A").concat(esc(monthInvoice.id), "<br/>\u767A\u884C\u65E5\uFF1A").concat(esc(monthInvoice.issueDate), "<br/>\u304A\u652F\u6255\u671F\u9650\uFF1A").concat(esc(monthInvoice.dueDate), "</div>\n  </div>\n  <table><thead><tr><th>\u5185\u5BB9</th><th style=\"text-align:right\">\u91D1\u984D</th></tr></thead><tbody>\n    ").concat((monthInvoice.lineItems || []).map(function (i) {
       return "<tr><td>".concat(esc(i.name), "</td><td style=\"text-align:right\">").concat(yen(i.subtotal), "</td></tr>");
-    }).join(""), "\n  </tbody></table>\n  <div class=\"totals\">\n    <div><span>\u5C0F\u8A08</span><span>").concat(yen(monthInvoice.amount), "</span></div>\n    ").concat(monthInvoice.registered ? "<div><span>\u6D88\u8CBB\u7A0E\uFF0810%\uFF09</span><span>".concat(yen(monthInvoice.tax), "</span></div>") : "<div style=\"color:#999\"><span>\u6D88\u8CBB\u7A0E</span><span>\u5BFE\u8C61\u5916</span></div>", "\n    <div class=\"grand\"><span>\u3054\u8ACB\u6C42\u984D</span><span>").concat(yen(monthInvoice.total), "</span></div>\n  </div>\n  <div class=\"foot\">\u652F\u6255\u72B6\u6CC1\uFF1A").concat(monthInvoice.status === "paid" ? "支払済み" : "未払い", "</div>\n</div></body></html>");
+    }).join(""), "\n  </tbody></table>\n  <div class=\"totals\">\n    <div><span>\u5C0F\u8A08</span><span>").concat(yen(monthInvoice.amount), "</span></div>\n    ").concat(monthInvoice.registered ? "<div><span>\u6D88\u8CBB\u7A0E\uFF0810%\uFF09</span><span>".concat(yen(monthInvoice.tax), "</span></div>") : "<div style=\"color:#999\"><span>\u6D88\u8CBB\u7A0E</span><span>\u5BFE\u8C61\u5916</span></div>", "\n    <div class=\"grand\"><span>\u3054\u8ACB\u6C42\u984D</span><span>").concat(yen(monthInvoice.total), "</span></div>\n  </div>\n  <div class=\"foot\">\u652F\u6255\u72B6\u6CC1\uFF1A").concat((monthInvoice.status === "paid" ? "支払済み" : monthInvoice.status === "partial" ? "一部支払済み（残 " + yen((Number(monthInvoice.total)||0) - (Number(monthInvoice.paidAmount)||0)) + "）" : "未払い"), "</div>\n</div></body></html>");
     var w = window.open("", "_blank");
     if (!w) {
       alert("ポップアップがブロックされました。ブラウザの設定で許可してください。");
@@ -4345,7 +4806,10 @@ function PayoutScreen(_ref20) {
    * 差引後の金額は事実として下に置く。マイナスのときは
    * 「あといくら稼げばプラスになるか」を示す。こちらの方が行動につながる。
    */
-  return /*#__PURE__*/React.createElement("div", {
+  return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(ScreenHeader, {
+    title: "報酬",
+    onBack: onNav ? function () { return onNav("home"); } : undefined
+  }), /*#__PURE__*/React.createElement("div", {
     className: "flex-1 overflow-y-auto bg-gray-50 px-4 py-3 flex flex-col gap-3"
   }, /*#__PURE__*/React.createElement("div", {
     className: "flex items-center justify-between"
@@ -4382,7 +4846,7 @@ function PayoutScreen(_ref20) {
     className: "px-4 py-3 flex items-center justify-between"
   }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("p", {
     className: "text-xs font-bold text-teal-700"
-  }, month, "\u5206 \u8ACB\u6C42\u66F8 ", monthInvoice.status === "paid" ? "（支払済み）" : "（未払い）"), /*#__PURE__*/React.createElement("p", {
+  }, month, "\u5206 \u8ACB\u6C42\u66F8 ", (monthInvoice.status === "paid" ? "（支払済み）" : monthInvoice.status === "partial" ? "（一部支払済み）" : "（未払い）")), /*#__PURE__*/React.createElement("p", {
     className: "text-[11px] text-gray-400 mt-0.5"
   }, monthInvoice.id, " / ", yen(monthInvoice.total))), /*#__PURE__*/React.createElement("button", {
     onClick: openInvoicePdf,
@@ -4476,7 +4940,7 @@ function PayoutScreen(_ref20) {
     className: "text-lg font-black text-purple-700"
   }, "-", yen(p.totalDeduction)))), /*#__PURE__*/React.createElement("div", {
     className: "h-6"
-  }));
+  })));
 }
 
 /* ---------- 報酬明細（月別・PDF） ---------- */
@@ -4484,7 +4948,8 @@ function StatementScreen(_ref31) {
   var driver = _ref31.driver,
     profile = _ref31.profile,
     records = _ref31.records,
-    company = _ref31.company;
+    company = _ref31.company,
+    onNav = _ref31.onNav;
   var _useState43 = useState(function () {
       // 既定は前月（明細は締まってから見るものなので）
       var d = new Date();
@@ -4560,7 +5025,10 @@ function StatementScreen(_ref31) {
     w.document.write(html);
     w.document.close();
   };
-  return /*#__PURE__*/React.createElement("div", {
+  return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(ScreenHeader, {
+    title: "\u5831\u916C\u660E\u7D30",
+    onBack: onNav ? function () { return onNav("more"); } : undefined
+  }), /*#__PURE__*/React.createElement("div", {
     className: "flex-1 overflow-y-auto bg-gray-50 px-4 py-3 flex flex-col gap-3"
   }, /*#__PURE__*/React.createElement("div", {
     className: "flex items-center justify-between"
@@ -4619,7 +5087,7 @@ function StatementScreen(_ref31) {
     className: "text-[11px] text-amber-600 mt-1"
   }, "\u4F1A\u793E\u306B\u53E3\u5EA7\u60C5\u5831\u306E\u767B\u9332\u3092\u4F9D\u983C\u3057\u3066\u304F\u3060\u3055\u3044\u3002\u767B\u9332\u3055\u308C\u306A\u3044\u3068\u5831\u916C\u304C\u632F\u308A\u8FBC\u3081\u307E\u305B\u3093\u3002")), /*#__PURE__*/React.createElement("div", {
     className: "h-6"
-  }));
+  })));
 }
 
 
@@ -4705,6 +5173,40 @@ function ShiftReportScreen(_ref100) {
       alert("次の必須項目が未入力です：\n".concat(missing.join("、")));
       return;
     }
+
+    // 【監査で発見・不具合修正】出庫・帰庫メーター、給油量が、
+    // これまで数字としての妥当性チェックが一切ないまま保存できていた
+    // （文字や記号がそのまま保存される、帰庫メーターが出庫メーターより
+    // 小さいといった、明らかにおかしい記録も検出できなかった）。
+    // 完全にブロックするのではなく、本人がその場で気づけるよう
+    // 確認を挟む（急な事情で正確な値が分からない場合もあるため）。
+    var numericFields = [
+      ["odometerOut", "出庫時メーター"],
+      ["odometerIn", "帰庫メーター"],
+      ["fuelOdometer", "給油時メーター"],
+      ["fuelAmount", "給油量"],
+    ];
+    for (var i = 0; i < numericFields.length; i++) {
+      var fKey = numericFields[i][0];
+      var fLabel = numericFields[i][1];
+      var fVal = form[fKey];
+      if (fVal && isNaN(Number(fVal))) {
+        setTab("record");
+        alert("「".concat(fLabel, "」に数字として読み取れない値（").concat(fVal, "）が入力されています。数字だけを入力してください。"));
+        return;
+      }
+    }
+    if (!isPre && form.odometerOut && form.odometerIn) {
+      var outVal = Number(form.odometerOut);
+      var inVal = Number(form.odometerIn);
+      if (inVal < outVal) {
+        setTab("record");
+        if (!window.confirm("帰庫メーター（".concat(inVal, "km）が、出庫メーター（").concat(outVal, "km）より小さくなっています。\n入力に誤りがあるかもしれません。このまま提出しますか？"))) {
+          return;
+        }
+      }
+    }
+
     var payload = _objectSpread(_objectSpread(_objectSpread({}, existing || {}), form), {}, {
       id: (existing && existing.id) || "SR-".concat(Date.now()),
       driverId: driverId,
@@ -4831,7 +5333,11 @@ function ShiftReportScreen(_ref100) {
 function ScheduleScreen(_ref38) {
   var records = _ref38.records,
     events = _ref38.events,
-    profile = _ref38.profile;
+    profile = _ref38.profile,
+    orders = _ref38.orders,
+    recurringAssignments = _ref38.recurringAssignments,
+    customers = _ref38.customers,
+    onNav = _ref38.onNav;
   var _useState45 = useState(function () {
       var d = new Date();
       d.setDate(1);
@@ -4858,11 +5364,51 @@ function ScheduleScreen(_ref38) {
       if (!d) return;
       (map[d] = map[d] || {
         recs: [],
-        evs: []
+        evs: [],
+        jobs: []
       })[k].push(v);
     };
     records.forEach(function (r) {
       return put(r.date, "recs", r);
+    });
+    // 【機能追加】ハコマネで自分に配車された受注のうち、まだ配送完了
+    // （実績化）していないものを「予定」として表示する。今まではここに
+    // 何も表示されず、配送が完了して初めてカレンダーに現れる、
+    // 過去の実績表示専用の画面になっていた。
+    (Array.isArray(orders) ? orders : []).forEach(function (o) {
+      if (!o || o.status === "delivered" || o.status === "cancelled") return;
+      put(o.deliveryDate, "jobs", o);
+    });
+    // 【機能追加】定期便（車建）は特定の日付を持たず「毎週◯曜日」という
+    // パターンで繰り返されるため、表示している月の日付を1つずつ確認し、
+    // 曜日が一致する日に予定として展開する。
+    // 既にその日・その定期便から実績（daily_records）が作られている
+    // 場合は、既に確定した情報なので「予定」としては二重に出さない
+    // （実績側に recurringId が記録されているので、それで判定する）。
+    var recordedRecurringByDate = {};
+    records.forEach(function (r) {
+      if (r && r.recurringId && r.date) {
+        recordedRecurringByDate[r.date] = recordedRecurringByDate[r.date] || {};
+        recordedRecurringByDate[r.date][r.recurringId] = true;
+      }
+    });
+    (Array.isArray(recurringAssignments) ? recurringAssignments : []).forEach(function (ra) {
+      if (!ra || ra.active === false) return;
+      var days = Array.isArray(ra.daysOfWeek) ? ra.daysOfWeek : [];
+      var custName = (Array.isArray(customers) ? customers : []).find(function (c) { return c && c.id === ra.customerId; });
+      custName = (custName && custName.name) || "定期便";
+      for (var d = 1; d <= daysInMonth; d++) {
+        var dateKey = "".concat(y, "-").concat(pad(m + 1), "-").concat(pad(d));
+        var dow = new Date(dateKey + "T00:00:00").getDay();
+        if (!days.includes(dow)) continue;
+        if (recordedRecurringByDate[dateKey] && recordedRecurringByDate[dateKey][ra.id]) continue;
+        put(dateKey, "jobs", {
+          id: "RA-".concat(ra.id, "-").concat(dateKey),
+          customerName: custName,
+          driverPayAmount: ra.driverPayAmount,
+          isRecurring: true
+        });
+      }
     });
     // 【重要】以前はここで会社の全イベントをそのまま表示していたため、
     // 入金期日・支払期日といった、実際の金額入りの経理情報が
@@ -4875,18 +5421,28 @@ function ScheduleScreen(_ref38) {
       return put(e.date, "evs", e);
     });
     return map;
-  }, [records, events]);
+  }, [records, events, orders, recurringAssignments, customers, y, m, daysInMonth]);
   var cells = [];
   for (var i = 0; i < startDow; i++) cells.push(null);
   for (var d = 1; d <= daysInMonth; d++) cells.push("".concat(y, "-").concat(pad(m + 1), "-").concat(pad(d)));
   var sel = byDate[selected] || {
     recs: [],
-    evs: []
+    evs: [],
+    jobs: []
   };
+  // 実績（確定額）と、まだ配送完了していない予定（見込み額）を分けて集計する。
+  // 混ぜて1つの数字にすると、「確定した報酬」なのか「まだ見込みの金額」
+  // なのか区別がつかなくなるため。
   var selSales = sel.recs.reduce(function (s, r) {
     return s + num(r.driverAmount);
   }, 0);
-  return /*#__PURE__*/React.createElement("div", {
+  var selJobsExpected = (sel.jobs || []).reduce(function (s, o) {
+    return s + num(o.driverPayAmount);
+  }, 0);
+  return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(ScreenHeader, {
+    title: "予定",
+    onBack: onNav ? function () { return onNav("home"); } : undefined
+  }), /*#__PURE__*/React.createElement("div", {
     className: "flex-1 overflow-y-auto bg-gray-50 px-4 py-3 flex flex-col gap-3"
   }, /*#__PURE__*/React.createElement("div", {
     className: "flex items-center justify-between"
@@ -4920,9 +5476,11 @@ function ScheduleScreen(_ref38) {
     var day = Number(key.slice(-2));
     var info = byDate[key] || {
       recs: [],
-      evs: []
+      evs: [],
+      jobs: []
     };
     var worked = info.recs.length > 0;
+    var hasJob = (info.jobs || []).length > 0;
     var hasEv = info.evs.length > 0;
     var isToday = key === today;
     var isSel = key === selected;
@@ -4939,6 +5497,8 @@ function ScheduleScreen(_ref38) {
       className: "flex gap-0.5 h-1.5"
     }, worked && /*#__PURE__*/React.createElement("span", {
       className: "w-1.5 h-1.5 rounded-full ".concat(isSel ? "bg-white" : "bg-teal-500")
+    }), hasJob && /*#__PURE__*/React.createElement("span", {
+      className: "w-1.5 h-1.5 rounded-full ".concat(isSel ? "bg-white/70" : "bg-blue-400")
     }), hasEv && /*#__PURE__*/React.createElement("span", {
       className: "w-1.5 h-1.5 rounded-full ".concat(isSel ? "bg-white/70" : "bg-orange-400")
     })));
@@ -4951,6 +5511,10 @@ function ScheduleScreen(_ref38) {
   }), "\u7A3C\u50CD"), /*#__PURE__*/React.createElement("span", {
     className: "flex items-center gap-1 text-[10px] text-gray-500"
   }, /*#__PURE__*/React.createElement("span", {
+    className: "w-1.5 h-1.5 rounded-full bg-blue-400"
+  }), "\u4E88\u5B9A"), /*#__PURE__*/React.createElement("span", {
+    className: "flex items-center gap-1 text-[10px] text-gray-500"
+  }, /*#__PURE__*/React.createElement("span", {
     className: "w-1.5 h-1.5 rounded-full bg-orange-400"
   }), "\u4E88\u5B9A\u30FB\u304A\u77E5\u3089\u305B"))), /*#__PURE__*/React.createElement(Card, {
     className: "overflow-hidden"
@@ -4958,11 +5522,34 @@ function ScheduleScreen(_ref38) {
     className: "px-4 py-2 bg-gray-50 border-b border-gray-100 flex items-center justify-between"
   }, /*#__PURE__*/React.createElement("p", {
     className: "text-xs font-bold text-gray-600"
-  }, selected), selSales > 0 && /*#__PURE__*/React.createElement("p", {
+  }, selected), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2"
+  }, selJobsExpected > 0 && /*#__PURE__*/React.createElement("p", {
+    className: "text-[11px] font-bold text-blue-500"
+  }, "見込み", yen(selJobsExpected)), selSales > 0 && /*#__PURE__*/React.createElement("p", {
     className: "text-xs font-bold text-teal-600"
-  }, yen(selSales))), sel.recs.length === 0 && sel.evs.length === 0 && /*#__PURE__*/React.createElement("p", {
+  }, yen(selSales)))), sel.recs.length === 0 && sel.evs.length === 0 && (sel.jobs || []).length === 0 && /*#__PURE__*/React.createElement("p", {
     className: "px-4 py-8 text-center text-sm text-gray-400"
-  }, "\u4E88\u5B9A\u30FB\u5B9F\u7E3E\u306F\u3042\u308A\u307E\u305B\u3093"), sel.evs.map(function (e, i) {
+  }, "\u4E88\u5B9A\u30FB\u5B9F\u7E3E\u306F\u3042\u308A\u307E\u305B\u3093"),
+  // 【機能追加】ハコマネで自分に配車された、まだ配送完了していない予定
+  (sel.jobs || []).map(function (o, i) {
+    return /*#__PURE__*/React.createElement("div", {
+      key: "j".concat(i),
+      className: "px-4 py-2.5 border-b border-gray-100 flex items-start justify-between gap-2 bg-blue-50/30"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex items-start gap-2 min-w-0"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "w-1.5 h-1.5 rounded-full bg-blue-400 mt-1.5 flex-shrink-0"
+    }), /*#__PURE__*/React.createElement("div", {
+      className: "min-w-0"
+    }, /*#__PURE__*/React.createElement("p", {
+      className: "text-sm font-bold text-gray-800 truncate"
+    }, o.customerName || "予定"), /*#__PURE__*/React.createElement("p", {
+      className: "text-[11px] text-gray-400"
+    }, o.from, o.to ? " → ".concat(o.to) : ""))), o.driverPayAmount != null && /*#__PURE__*/React.createElement("p", {
+      className: "text-sm font-bold text-blue-500 flex-shrink-0"
+    }, yen(o.driverPayAmount)));
+  }), sel.evs.map(function (e, i) {
     return /*#__PURE__*/React.createElement("div", {
       key: "e".concat(i),
       className: "px-4 py-2.5 border-b border-gray-100 flex items-start gap-2"
@@ -4990,13 +5577,14 @@ function ScheduleScreen(_ref38) {
     }, yen(r.driverAmount)));
   })), /*#__PURE__*/React.createElement("div", {
     className: "h-6"
-  }));
+  })));
 }
 
 /* ---------- お知らせ ---------- */
 function NoticesScreen(_ref39) {
   var notices = _ref39.notices,
-    onRead = _ref39.onRead;
+    onRead = _ref39.onRead,
+    onNav = _ref39.onNav;
   var unread = notices.filter(function (n) {
     return !n.isRead;
   });
@@ -5035,7 +5623,10 @@ function NoticesScreen(_ref39) {
       label: "お知らせ"
     }
   };
-  return /*#__PURE__*/React.createElement("div", {
+  return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(ScreenHeader, {
+    title: "お知らせ",
+    onBack: onNav ? function () { return onNav("more"); } : undefined
+  }), /*#__PURE__*/React.createElement("div", {
     className: "flex-1 overflow-y-auto bg-gray-50 px-4 py-3 flex flex-col gap-3"
   }, notices.length === 0 && /*#__PURE__*/React.createElement("div", {
     className: "flex flex-col items-center justify-center py-20"
@@ -5087,7 +5678,7 @@ function NoticesScreen(_ref39) {
     }, n.message));
   }))), /*#__PURE__*/React.createElement("div", {
     className: "h-6"
-  }));
+  })));
 }
 
 /* ---------- チャット ---------- */
@@ -5097,7 +5688,8 @@ function ChatScreen(_ref40) {
     onSend = _ref40.onSend,
     onAttach = _ref40.onAttach,
     chatReady = _ref40.chatReady,
-    sending = _ref40.sending;
+    sending = _ref40.sending,
+    onNav = _ref40.onNav;
   var _useState49 = useState(""),
     _useState50 = _slicedToArray(_useState49, 2),
     text = _useState50[0],
@@ -5120,7 +5712,10 @@ function ChatScreen(_ref40) {
     });
   };
   if (!chatReady) {
-    return /*#__PURE__*/React.createElement("div", {
+    return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(ScreenHeader, {
+      title: "チャット",
+      onBack: onNav ? function () { return onNav("more"); } : undefined
+    }), /*#__PURE__*/React.createElement("div", {
       className: "flex-1 flex flex-col items-center justify-center bg-gray-50 px-8 text-center gap-3"
     }, /*#__PURE__*/React.createElement("p", {
       className: "text-4xl"
@@ -5128,9 +5723,12 @@ function ChatScreen(_ref40) {
       className: "text-sm font-bold text-gray-600"
     }, "\u30C1\u30E3\u30C3\u30C8\u306E\u6E96\u5099\u304C\u3067\u304D\u3066\u3044\u307E\u305B\u3093"), /*#__PURE__*/React.createElement("p", {
       className: "text-xs text-gray-400 leading-relaxed"
-    }, "\u4F1A\u793E\u5074\u3067\u30C1\u30E3\u30C3\u30C8\u6A5F\u80FD\u306E\u521D\u671F\u8A2D\u5B9A\uFF08\u30C6\u30FC\u30D6\u30EB\u4F5C\u6210\uFF09\u304C\u5FC5\u8981\u3067\u3059\u3002", /*#__PURE__*/React.createElement("br", null), "\u7BA1\u7406\u8005\u306B\u3054\u9023\u7D61\u304F\u3060\u3055\u3044\u3002"));
+    }, "\u4F1A\u793E\u5074\u3067\u30C1\u30E3\u30C3\u30C8\u6A5F\u80FD\u306E\u521D\u671F\u8A2D\u5B9A\uFF08\u30C6\u30FC\u30D6\u30EB\u4F5C\u6210\uFF09\u304C\u5FC5\u8981\u3067\u3059\u3002", /*#__PURE__*/React.createElement("br", null), "\u7BA1\u7406\u8005\u306B\u3054\u9023\u7D61\u304F\u3060\u3055\u3044\u3002")));
   }
-  return /*#__PURE__*/React.createElement("div", {
+  return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(ScreenHeader, {
+    title: "\u30C1\u30E3\u30C3\u30C8",
+    onBack: onNav ? function () { return onNav("more"); } : undefined
+  }), /*#__PURE__*/React.createElement("div", {
     className: "flex-1 flex flex-col bg-gray-50 min-h-0"
   }, /*#__PURE__*/React.createElement("div", {
     className: "flex-1 overflow-y-auto px-4 py-3 flex flex-col gap-2"
@@ -5223,7 +5821,7 @@ function ChatScreen(_ref40) {
     fill: "currentColor"
   }, /*#__PURE__*/React.createElement("path", {
     d: "M2 21l21-9L2 3v7l15 2-15 2z"
-  })))));
+  }))))));
 }
 
 /* ---------- プロフィール ---------- */
@@ -5231,7 +5829,8 @@ function ProfileScreen(_ref41) {
   var driver = _ref41.driver,
     profile = _ref41.profile,
     onSaveSelf = _ref41.onSaveSelf,
-    onLogout = _ref41.onLogout;
+    onLogout = _ref41.onLogout,
+    onNav = _ref41.onNav;
   var _useState51 = useState(false),
     _useState52 = _slicedToArray(_useState51, 2),
     editing = _useState52[0],
@@ -5335,7 +5934,10 @@ function ProfileScreen(_ref41) {
   var mask = function mask(v) {
     return v ? "".concat("•".repeat(Math.max(0, String(v).length - 4))).concat(String(v).slice(-4)) : "";
   };
-  return /*#__PURE__*/React.createElement("div", {
+  return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(ScreenHeader, {
+    title: "\u30D7\u30ED\u30D5\u30A3\u30FC\u30EB",
+    onBack: onNav ? function () { return onNav("more"); } : undefined
+  }), /*#__PURE__*/React.createElement("div", {
     className: "flex-1 overflow-y-auto bg-gray-50 px-4 py-3 flex flex-col gap-3"
   }, saved && /*#__PURE__*/React.createElement("div", {
     className: "bg-teal-500 text-white text-sm font-bold rounded-xl px-4 py-2.5 text-center"
@@ -5564,7 +6166,7 @@ function ProfileScreen(_ref41) {
     onCancel: function onCancel() {
       return setConfirmOut(false);
     }
-  }));
+  })));
 }
 
 /* ══════════════ 6. App ══════════════ */
@@ -5579,6 +6181,36 @@ function App() {
     _useState64 = _slicedToArray(_useState63, 2),
     screen = _useState64[0],
     setScreen = _useState64[1];
+  // 【不具合修正】「お知らせ」画面は、ホーム画面のベルアイコンと、
+  // 「その他」タブのメニューの、2箇所からアクセスできる。戻るボタンの
+  // 行き先を "その他" に固定していたため、ホームから開いた場合も
+  // 「その他」タブへ戻ってしまう不具合があった。どちらから開いたかを
+  // 記録し、正しい場所へ戻れるようにする。
+  var _useStateNR = useState("home"),
+    _useStateNR2 = _slicedToArray(_useStateNR, 2),
+    noticesReturnTo = _useStateNR2[0],
+    setNoticesReturnTo = _useStateNR2[1];
+  var openNotices = function openNotices(from) {
+    setNoticesReturnTo(from);
+    setScreen("notices");
+  };
+  // 【機能追加】ログイン前の画面（ログイン／パスワード設定・再設定）を
+  // 切り替えるための状態。ログイン済み後の screen とは別に管理する。
+  var _useStatePL = useState("login"),
+    _useStatePL2 = _slicedToArray(_useStatePL, 2),
+    preLoginScreen = _useStatePL2[0],
+    setPreLoginScreen = _useStatePL2[1];
+  // 【機能追加・監査で発見】これまで「未送信のデータが何件溜まっているか」を
+  // ドライバーが確認する手段が一切なかった。通信失敗時は静かにキューに
+  // 積まれるだけで、本人は「保存できた」と思ったまま何時間も気づけない
+  // 危険があった。件数を常時追跡し、画面に表示できるようにする。
+  var _useStatePC = useState(0),
+    _useStatePC2 = _slicedToArray(_useStatePC, 2),
+    pendingCount = _useStatePC2[0],
+    setPendingCount = _useStatePC2[1];
+  var refreshPendingCount = function refreshPendingCount() {
+    setPendingCount(LS.get(K_QUEUE, []).length + LS.get(K_QUEUE_SR, []).length);
+  };
   var _useState65 = useState(false),
     _useState66 = _slicedToArray(_useState65, 2),
     entryOpen = _useState66[0],
@@ -5617,6 +6249,11 @@ function App() {
     _useState80 = _slicedToArray(_useState79, 2),
     orders = _useState80[0],
     setOrders = _useState80[1];
+  // 【機能追加】定期便（車建）の予定をカレンダーに表示するための状態。
+  var _useStateRA = useState([]),
+    _useStateRA2 = _slicedToArray(_useStateRA, 2),
+    recurringAssignments = _useStateRA2[0],
+    setRecurringAssignments = _useStateRA2[1];
   var _useState81 = useState([]),
     _useState82 = _slicedToArray(_useState81, 2),
     invoices = _useState82[0],
@@ -5709,7 +6346,7 @@ function App() {
   /* --- データ読み込み --- */
   var loadAll = useCallback(/*#__PURE__*/function () {
     var _ref45 = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee15(d) {
-      var _yield$Promise$all, _yield$Promise$all2, myDriverRows, recs, jts, cus, evs, comps, myOrders, myInvoices, me, myId, _t5;
+      var _yield$Promise$all, _yield$Promise$all2, myDriverRows, recs, jts, cus, evs, comps, myOrders, myRecurring, myInvoices, me, myId, _t5;
       return _regenerator().w(function (_context15) {
         while (1) switch (_context15.p = _context15.n) {
           case 0:
@@ -5732,7 +6369,7 @@ function App() {
               return [];
             }), api.list("customers", d.tenantId).catch(function () {
               return [];
-            }), api.list("events", d.tenantId).catch(function () {
+            }), api.list("events", d.tenantId, eventsDateRangeFilter()).catch(function () {
               return [];
             }), api.list("company_info", d.tenantId).catch(function () {
               return [];
@@ -5740,6 +6377,14 @@ function App() {
             // 実績を受注に自動で紐付けるため、自分に割り当てられた受注だけを取得する。
             // （他のドライバーの受注内容・請求額まで見えてしまわないよう、必ず driverId で絞り込む）
             api.request("orders", {
+              filter: "?tenant_id=eq.".concat(d.tenantId, "&payload->>driverId=eq.").concat(encodeURIComponent(d.driverRecordId), "&select=id,payload")
+            }).catch(function () {
+              return [];
+            }),
+            // 【機能追加】定期便（車建）の予定をカレンダーに表示するため、
+            // 自分に割り当てられた定期便を取得する。単発受注と同じ理由で、
+            // 必ず driverId で絞り込む。
+            api.request("recurring_assignments", {
               filter: "?tenant_id=eq.".concat(d.tenantId, "&payload->>driverId=eq.").concat(encodeURIComponent(d.driverRecordId), "&select=id,payload")
             }).catch(function () {
               return [];
@@ -5757,7 +6402,7 @@ function App() {
             })]);
           case 3:
             _yield$Promise$all = _context15.v;
-            _yield$Promise$all2 = _slicedToArray(_yield$Promise$all, 9);
+            _yield$Promise$all2 = _slicedToArray(_yield$Promise$all, 10);
             myDriverRows = _yield$Promise$all2[0];
             recs = _yield$Promise$all2[1];
             jts = _yield$Promise$all2[2];
@@ -5765,9 +6410,15 @@ function App() {
             evs = _yield$Promise$all2[4];
             comps = _yield$Promise$all2[5];
             myOrders = _yield$Promise$all2[6];
-            myInvoices = _yield$Promise$all2[7];
-            setShiftReports((_yield$Promise$all2[8] || []).filter(function (r) { return r && r.driverId === d.driverRecordId; }));
+            myRecurring = _yield$Promise$all2[7];
+            myInvoices = _yield$Promise$all2[8];
+            setShiftReports((_yield$Promise$all2[9] || []).filter(function (r) { return r && r.driverId === d.driverRecordId; }));
             setOrders((myOrders || []).map(function (r) {
+              return _objectSpread(_objectSpread({}, r.payload || {}), {}, {
+                _dbId: r.id
+              });
+            }));
+            setRecurringAssignments((myRecurring || []).map(function (r) {
               return _objectSpread(_objectSpread({}, r.payload || {}), {}, {
                 _dbId: r.id
               });
@@ -5838,7 +6489,7 @@ function App() {
    */
   var refreshLive = useCallback(/*#__PURE__*/function () {
     var _ref46 = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee16(d) {
-      var _yield$Promise$all3, _yield$Promise$all4, recs, evs, myRows, myId, latest, today, contractEnded, inactive, _t6;
+      var _yield$Promise$all3, _yield$Promise$all4, recs, evs, myRows, myOrdersLive, myRecurringLive, myId, latest, today, contractEnded, inactive, _t6;
       return _regenerator().w(function (_context16) {
         while (1) switch (_context16.p = _context16.n) {
           case 0:
@@ -5852,7 +6503,7 @@ function App() {
             _context16.n = 2;
             return Promise.all([api.listMine("daily_records", d.tenantId, d.driverRecordId).catch(function () {
               return null;
-            }), api.list("events", d.tenantId).catch(function () {
+            }), api.list("events", d.tenantId, eventsDateRangeFilter()).catch(function () {
               return null;
             }),
             // 【重要】ログインセッションはlocalStorageにキャッシュされ、
@@ -5865,19 +6516,43 @@ function App() {
               filter: "?tenant_id=eq.".concat(d.tenantId, "&payload->>id=eq.").concat(encodeURIComponent(d.driverRecordId), "&select=id,payload")
             }).catch(function () {
               return null;
+            }),
+            // 【機能追加・監査で発見】以前は orders・recurring_assignments
+            // （カレンダーの「予定」表示に使う）が、この定期更新の対象に
+            // 含まれておらず、ログイン時にしか取得されていなかった。
+            // 会社側で配送予定を変更・追加・キャンセルしても、
+            // ドライバーがアプリを開いたままでいる限り、その変更に
+            // 気づけないまま古い予定を見続けてしまう危険があった。
+            api.request("orders", {
+              filter: "?tenant_id=eq.".concat(d.tenantId, "&payload->>driverId=eq.").concat(encodeURIComponent(d.driverRecordId), "&select=id,payload")
+            }).catch(function () {
+              return null;
+            }),
+            api.request("recurring_assignments", {
+              filter: "?tenant_id=eq.".concat(d.tenantId, "&payload->>driverId=eq.").concat(encodeURIComponent(d.driverRecordId), "&select=id,payload")
+            }).catch(function () {
+              return null;
             })]);
           case 2:
             _yield$Promise$all3 = _context16.v;
-            _yield$Promise$all4 = _slicedToArray(_yield$Promise$all3, 3);
+            _yield$Promise$all4 = _slicedToArray(_yield$Promise$all3, 5);
             recs = _yield$Promise$all4[0];
             evs = _yield$Promise$all4[1];
             myRows = _yield$Promise$all4[2];
+            myOrdersLive = _yield$Promise$all4[3];
+            myRecurringLive = _yield$Promise$all4[4];
             myId = (profile === null || profile === void 0 ? void 0 : profile.id) || d.driverRecordId;
             if (recs) setRecords((recs || []).filter(function (r) {
               return r && !r.deleted && r.driverId === myId;
             }));
             if (evs) setEvents((evs || []).filter(function (e) {
               return e && !e.deleted && (!e.driverId || e.driverId === myId);
+            }));
+            if (myOrdersLive) setOrders(myOrdersLive.map(function (r) {
+              return _objectSpread(_objectSpread({}, r.payload || {}), {}, { _dbId: r.id });
+            }));
+            if (myRecurringLive) setRecurringAssignments(myRecurringLive.map(function (r) {
+              return _objectSpread(_objectSpread({}, r.payload || {}), {}, { _dbId: r.id });
             }));
             if (!myRows) {
               _context16.n = 4;
@@ -5902,6 +6577,20 @@ function App() {
             LS.del(K_DRIVER);
             LS.del(K_SHIFT);
             LS.del(K_PRECHECK_DRAFT);
+            // 【重要・不具合修正】handleLogout と同じ理由で、既読情報・
+            // 未送信キューもここで必ず削除する。この経路は退職・契約終了に
+            // よる強制ログアウトのため、未送信データがあっても
+            // 確認は挟まず（既に会社側の判断でアカウントが無効化されて
+            // いるため）、そのまま削除する。
+            LS.del(K_READ);
+            LS.del(K_QUEUE);
+            LS.del(K_QUEUE_SR);
+            setProfile(null);
+            setRecords([]);
+            setShiftReports([]);
+            setChatMsgs([]);
+            setChatReady(false);
+            setPendingCount(0);
             return _context16.a(2);
           case 3:
             setProfile(latest);
@@ -5988,12 +6677,13 @@ function App() {
 
   /* --- 未送信キューの再送（オフライン対応） --- */
   var flushQueue = useCallback(/*#__PURE__*/_asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee18() {
-    var queue, rest, _iterator, _step, item, _t8, _t9;
+    var queue, queueSR, rest, restSR, _iterator, _step, item, _t8, _t9, _iteratorSR, _stepSR, itemSR, _t8b, _t9b, conflictMsgs;
     return _regenerator().w(function (_context18) {
       while (1) switch (_context18.p = _context18.n) {
         case 0:
           queue = LS.get(K_QUEUE, []);
-          if (!(!queue.length || !driver || offline)) {
+          queueSR = LS.get(K_QUEUE_SR, []);
+          if (!((!queue.length && !queueSR.length) || !driver || offline)) {
             _context18.n = 1;
             break;
           }
@@ -6001,6 +6691,8 @@ function App() {
         case 1:
           setSyncing(true);
           rest = [];
+          restSR = [];
+          conflictMsgs = [];
           _iterator = _createForOfIteratorHelper(queue);
           _context18.p = 2;
           _iterator.s();
@@ -6019,7 +6711,16 @@ function App() {
         case 6:
           _context18.p = 6;
           _t8 = _context18.v;
-          rest.push(item); // 失敗したものは次回に持ち越す
+          // 【重要・不具合修正】以前は、再送時の失敗を一律「次回に持ち越す」
+          // だけで、競合（会社側で既に更新されている）エラーが起きても、
+          // 古いデータのまま無限に再送信を試み続けてしまっていた。
+          // 実績を直接保存するとき（saveRecord）と同じく、競合の場合は
+          // 破棄して本人に伝える。
+          if (_t8 && (_t8.code === "CONFLICT" || _t8.code === "VALIDATION_REJECTED")) {
+            conflictMsgs.push(_t8.message || "実績の内容が会社側で更新されています。");
+          } else {
+            rest.push(item);
+          }
         case 7:
           _context18.n = 3;
           break;
@@ -6036,13 +6737,85 @@ function App() {
           return _context18.f(10);
         case 11:
           LS.set(K_QUEUE, rest);
+          // 【機能追加】日報のキューも同じ流れで再送する。
+          _iteratorSR = _createForOfIteratorHelper(queueSR);
+          _context18.p = 12;
+          _iteratorSR.s();
+        case 13:
+          if ((_stepSR = _iteratorSR.n()).done) {
+            _context18.n = 18;
+            break;
+          }
+          itemSR = _stepSR.value;
+          _context18.p = 14;
+          _context18.n = 15;
+          return api.upsertRecord("shift_reports", driver.tenantId, itemSR.payload, itemSR.dbId);
+        case 15:
+          _context18.n = 17;
+          break;
+        case 16:
+          _context18.p = 16;
+          _t8b = _context18.v;
+          if (_t8b && (_t8b.code === "CONFLICT" || _t8b.code === "VALIDATION_REJECTED")) {
+            conflictMsgs.push(_t8b.message || "日報の内容が会社側で更新されています。");
+          } else {
+            restSR.push(itemSR);
+          }
+        case 17:
+          _context18.n = 13;
+          break;
+        case 18:
+          _context18.n = 20;
+          break;
+        case 19:
+          _context18.p = 19;
+          _t9b = _context18.v;
+          _iteratorSR.e(_t9b);
+        case 20:
+          _context18.p = 20;
+          _iteratorSR.f();
+          return _context18.f(20);
+        case 21:
+          LS.set(K_QUEUE_SR, restSR);
+          refreshPendingCount();
           setSyncing(false);
-          if (rest.length === 0) loadAll(driver);
-        case 12:
+          if (conflictMsgs.length > 0) {
+            window.alert(conflictMsgs.slice(0, 3).join("\n") + (conflictMsgs.length > 3 ? "\n…他 " + (conflictMsgs.length - 3) + " 件" : ""));
+          }
+          if (rest.length === 0 && restSR.length === 0) loadAll(driver);
+        case 22:
           return _context18.a(2);
       }
-    }, _callee18, null, [[4, 6], [2, 9, 10, 11]]);
+    }, _callee18, null, [[14, 16], [12, 19, 20, 21], [4, 6], [2, 9, 10, 11]]);
   })), [driver, offline, loadAll]);
+
+  // ログイン直後・ドライバーが変わったタイミングで、既にキューに
+  // 残っているデータが無いか確認する（アプリを閉じてから再度開いた
+  // 場合、前回の未送信データがまだ残っている可能性があるため）。
+  useEffect(function () {
+    if (driver) refreshPendingCount();
+  }, [driver]);
+  // 【機能追加・監査で発見】これまで、通信・保存の失敗はドライバー
+  // 本人にしか伝わらず、会社側は一切気づく手段が無かった。
+  // pendingCount（未送信件数）が変わるたびに、現在の状態をサーバーに
+  // 報告する。これにより、会社側が「今、同期に失敗しているドライバー」
+  // を、問い合わせを待たずに把握できるようになる。
+  // 業務データそのものではない監視用の信号なので、確実な再送保証は
+  // 付けない（多少報告が遅れても、次の変化やポーリングで自然に
+  // 最新化されるため）。
+  useEffect(function () {
+    if (!driver) return;
+    api.upsertRecord("driver_sync_status", driver.tenantId, {
+      id: "SYNC-".concat(driver.driverRecordId),
+      driverId: driver.driverRecordId,
+      driverName: driver.driverName || "",
+      pendingCount: pendingCount,
+      lastReportedAt: new Date().toISOString(),
+      lastSyncSuccessAt: pendingCount === 0 ? new Date().toISOString() : undefined
+    }, undefined).catch(function (e) {
+      console.error("driver_sync_status report error:", e);
+    });
+  }, [driver, pendingCount]);
   useEffect(function () {
     if (!offline && driver) flushQueue();
   }, [offline, driver, flushQueue]);
@@ -6077,6 +6850,7 @@ function App() {
         dbId,
         newDbId,
         q,
+        queueSaveOk,
         _args19 = arguments,
         _t0;
       return _regenerator().w(function (_context19) {
@@ -6155,6 +6929,33 @@ function App() {
             });
             setEntryOpen(false);
             setEditingRec(null);
+            // 【重要・不具合修正】以前は、通信が「失敗」と判定された場合
+            // （catchブロック）にだけキューへ保存していた。そのため、
+            // 通信の結果が返ってくる前（リクエスト送信中〜応答待ちの間）に
+            // アプリが強制終了されると、キューへの保存が一度も実行されない
+            // まま終わってしまい、setRecords によるメモリ上の更新も
+            // プロセス終了とともに消え、このデータが跡形もなく失われて
+            // しまう危険があった（実際にこの経路をたどって検証・確認した）。
+            // 通信を試みる"前"に、まず必ずキューへ書き込んでおく。
+            // これにより、途中で強制終了されても、次回アプリを開いた際に
+            // 「未送信データ」として検知・再送信できる。
+            q = LS.get(K_QUEUE, []);
+            queueSaveOk = LS.set(K_QUEUE, [].concat(_toConsumableArray(q.filter(function (x) {
+              return x.payload.id !== payload.id;
+            })), [{
+              payload: payload,
+              dbId: dbId
+            }]));
+            refreshPendingCount();
+            if (!queueSaveOk) {
+              // 【重要・不具合修正】端末のストレージ容量が不足している等の
+              // 理由で、キューへの保存自体が失敗した場合、これまでの
+              // 保護（強制終了してもデータが残る）が効かない状態になる。
+              // このまま気づかずに通信を試みて、それも失敗すると、
+              // このデータは本当にどこにも残らず消えてしまう。
+              // 通信を試みる前に、必ず本人に伝える。
+              window.alert("端末の空き容量が不足しているため、この内容を安全に保存できません。\n他のアプリのデータを削除するなどして空き容量を確保してから、もう一度お試しください。\n\nこのまま通信環境の良い場所で送信を試みますが、途中でアプリを閉じると内容が失われる可能性があります。");
+            }
             _context19.p = 3;
             _context19.n = 4;
             return api.upsertRecord("daily_records", driver.tenantId, payload, dbId);
@@ -6169,20 +6970,64 @@ function App() {
                 });
               });
             }
-            _context19.n = 6;
+            // 送信に成功したので、先に積んでおいたキューから取り除く。
+            q = LS.get(K_QUEUE, []);
+            LS.set(K_QUEUE, q.filter(function (x) {
+              return x.payload.id !== payload.id;
+            }));
+            refreshPendingCount();
+            _context19.n = 7;
             break;
           case 5:
             _context19.p = 5;
             _t0 = _context19.v;
-            // 通信失敗 → 端末に貯めて、オンライン復帰時に自動送信
+            if (!(_t0 && (_t0.code === "CONFLICT" || _t0.code === "VALIDATION_REJECTED"))) {
+              _context19.n = 6;
+              break;
+            }
+            // 【機能追加・監査で発見】この実績は、あなたが最後に確認した
+            // 後に、会社側（ハコマネ）で更新されていた。このまま
+            // 「通信失敗」として扱い、キューに残して自動再送してしまうと、
+            // 同じ競合が何度も繰り返されるだけでなく、会社側の
+            // 正しい修正を、古いデータで上書きし続けてしまう危険がある。
+            // 先に積んでおいた（今回のシナリオでは間違っている可能性が
+            // 高い）データをキューから取り除き、サーバー側の最新の値で
+            // 画面を更新したうえで、本人に明確に伝える。
             q = LS.get(K_QUEUE, []);
-            LS.set(K_QUEUE, [].concat(_toConsumableArray(q.filter(function (x) {
+            LS.set(K_QUEUE, q.filter(function (x) {
               return x.payload.id !== payload.id;
-            })), [{
-              payload: payload,
-              dbId: dbId
-            }]));
+            }));
+            refreshPendingCount();
+            if (_t0.code === "CONFLICT" && _t0.serverPayload) {
+              setRecords(function (prev) {
+                return prev.map(function (r) {
+                  return r.id === payload.id ? _objectSpread(_objectSpread({}, _t0.serverPayload), {}, {
+                    _dbId: r._dbId
+                  }) : r;
+                });
+              });
+              window.alert(_t0.message || "この実績は、あなたが最後に確認した後に、会社側で更新されています。最新の内容をご確認ください。");
+            } else if (_t0.code === "VALIDATION_REJECTED") {
+              // 【重要・不具合修正】サーバー側の検証で拒否された実績は、
+              // 実際にはサーバーに一切保存されていない。画面上に楽観的に
+              // 反映されたままにしておくと、「報酬画面には金額が
+              // 表示されているのに、実際には会社に届いていない」という、
+              // 最も避けるべき食い違いになってしまう。この実績を
+              // 画面上の一覧からも取り除き、正しく気づけるようにする。
+              setRecords(function (prev) {
+                return prev.filter(function (r) {
+                  return r.id !== payload.id;
+                });
+              });
+              window.alert("この内容は保存できませんでした：\n".concat(_t0.message || "入力内容をご確認ください。", "\n\n入力し直してから、もう一度保存してください。"));
+            }
+            _context19.n = 7;
+            break;
           case 6:
+            // 通信失敗：既に上でキューへ保存済みなので、ここでは何もしなくてよい
+            // （二重に書き込む必要はない。念のため件数だけ再確認しておく）。
+            refreshPendingCount();
+          case 7:
             return _context19.a(2);
         }
       }, _callee19, null, [[3, 5]]);
@@ -6194,25 +7039,96 @@ function App() {
 
   /** 乗務前日報・乗務後日報の保存。1日1件のレコードを、乗務前・乗務後で
       それぞれ upsert する（同じ日の分は上書きされる）。 */
-  var saveShiftReport = function saveShiftReport(payload, dbId) {
-    setShiftReports(function (prev) {
-      var exists = prev.some(function (r) { return r.id === payload.id; });
-      return exists ? prev.map(function (r) { return r.id === payload.id ? _objectSpread(_objectSpread({}, payload), {}, { _dbId: r._dbId }) : r; }) : [].concat(_toConsumableArray(prev), [payload]);
-    });
-    // 【重要】保存先のdbIdをローカルの状態に反映しないと、乗務前を提出した
-    // 直後（サーバー応答が返る前）にすぐ乗務後を提出した場合、同じ日の
-    // レコードを更新するはずが、dbIdが分からず別の新しい行を
-    // 作ってしまう（実際に検証で見つかった不具合）。
-    // upsertRecord が返す最終的なdbIdを、必ずここで反映する。
-    api.upsertRecord("shift_reports", driver.tenantId, payload, dbId).then(function (resolvedDbId) {
-      if (!resolvedDbId) return;
-      setShiftReports(function (prev) {
-        return prev.map(function (r) { return r.id === payload.id ? _objectSpread(_objectSpread({}, r), {}, { _dbId: resolvedDbId }) : r; });
-      });
-    }).catch(function (e) {
-      console.error("shift_reports upsert error:", e);
-    });
-  };
+  var saveShiftReport = /*#__PURE__*/function () {
+    var _ref60 = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _calleeSR(payload, dbId) {
+      var q, resolvedDbId, queueSaveOkSR, _t20;
+      return _regenerator().w(function (_contextSR) {
+        while (1) switch (_contextSR.p = _contextSR.n) {
+          case 0:
+            setShiftReports(function (prev) {
+              var exists = prev.some(function (r) { return r.id === payload.id; });
+              return exists ? prev.map(function (r) { return r.id === payload.id ? _objectSpread(_objectSpread({}, payload), {}, { _dbId: r._dbId }) : r; }) : [].concat(_toConsumableArray(prev), [payload]);
+            });
+            // 【重要・不具合修正】以前は、配送実績（daily_records）には
+            // 「通信を試みる前に、まずキューへ保存しておく」という保護が
+            // あったのに、日報（shift_reports）には無かった。通信失敗時も
+            // console.error するだけで、キューに残さず・本人にも伝えず、
+            // 静かに失われてしまっていた。実績と全く同じ理由・同じ方式で
+            // 保護する（詳しい理由は saveRecord 内の同種のコメントを参照）。
+            q = LS.get(K_QUEUE_SR, []);
+            queueSaveOkSR = LS.set(K_QUEUE_SR, [].concat(_toConsumableArray(q.filter(function (x) {
+              return x.payload.id !== payload.id;
+            })), [{
+              payload: payload,
+              dbId: dbId
+            }]));
+            refreshPendingCount();
+            if (!queueSaveOkSR) {
+              // 端末のストレージ容量不足等でキューへの保存自体が
+              // 失敗した場合の警告（詳しい理由は saveRecord 内の
+              // 同種のコメントを参照）。
+              window.alert("端末の空き容量が不足しているため、この内容を安全に保存できません。\n他のアプリのデータを削除するなどして空き容量を確保してから、もう一度お試しください。");
+            }
+            _contextSR.p = 1;
+            _contextSR.n = 2;
+            return api.upsertRecord("shift_reports", driver.tenantId, payload, dbId);
+          case 2:
+            resolvedDbId = _contextSR.v;
+            if (resolvedDbId) {
+              setShiftReports(function (prev) {
+                return prev.map(function (r) { return r.id === payload.id ? _objectSpread(_objectSpread({}, r), {}, { _dbId: resolvedDbId }) : r; });
+              });
+            }
+            // 送信成功、キューから取り除く。
+            q = LS.get(K_QUEUE_SR, []);
+            LS.set(K_QUEUE_SR, q.filter(function (x) {
+              return x.payload.id !== payload.id;
+            }));
+            refreshPendingCount();
+            _contextSR.n = 4;
+            break;
+          case 3:
+            _contextSR.p = 3;
+            _t20 = _contextSR.v;
+            console.error("shift_reports upsert error:", _t20);
+            if (_t20 && _t20.code === "CONFLICT") {
+              // 会社側で既に更新されている場合は、実績と同じくキューから
+              // 除去し、古い内容のまま再送信を繰り返さないようにする。
+              q = LS.get(K_QUEUE_SR, []);
+              LS.set(K_QUEUE_SR, q.filter(function (x) {
+                return x.payload.id !== payload.id;
+              }));
+              refreshPendingCount();
+              window.alert(_t20.message || "この日報は、あなたが最後に確認した後に、会社側で更新されています。");
+            } else if (_t20 && _t20.code === "VALIDATION_REJECTED") {
+              // 【重要・不具合修正】実績（saveRecord）には既にあった
+              // 「サーバーに拒否された内容は、画面上の一覧からも消す」
+              // という処理が、日報には抜けていた。このままだと、
+              // 実際にはサーバーに一切保存されていない日報が、
+              // 提出済みであるかのように画面に残り続けてしまう。
+              q = LS.get(K_QUEUE_SR, []);
+              LS.set(K_QUEUE_SR, q.filter(function (x) {
+                return x.payload.id !== payload.id;
+              }));
+              refreshPendingCount();
+              setShiftReports(function (prev) {
+                return prev.filter(function (r) {
+                  return r.id !== payload.id;
+                });
+              });
+              window.alert("この日報は保存できませんでした：\n".concat(_t20.message || "入力内容をご確認ください。", "\n\n入力し直してから、もう一度提出してください。"));
+            }
+            // 通常の通信失敗は、既にキューへ保存済みなのでここでは何もしない
+            // （後でオンライン復帰時に自動再送される）。
+          case 4:
+            return _contextSR.a(2);
+        }
+      }, _calleeSR, null, [[1, 3]]);
+    }));
+    return function saveShiftReport(_x, _x2) {
+      return _ref60.apply(this, arguments);
+    };
+  }();
 
   /**
    * ===== 今月分をまとめて申請する =====
@@ -6302,6 +7218,7 @@ function App() {
                       payload: r,
                       dbId: r._dbId
                     }]));
+                    refreshPendingCount();
                   case 4:
                     return _context20.a(2);
                 }
@@ -6481,18 +7398,45 @@ function App() {
         id: e.id,
         title: e.title || "お知らせ",
         message: e.note || e.message || "",
-        date: e.date,
+        date: relativeDateLabel(e.date),
+        dateRaw: e.date,
         kind: kindOf(e),
         isRead: readIds.includes(e.id)
       };
     }).sort(function (a, b) {
-      return String(b.date).localeCompare(String(a.date));
+      // 【重要・不具合修正】以前は日付の新しい順だけで並んでいたため、
+      // 「重要」なお知らせが、後から届いた通常のお知らせによって
+      // 下に押しやられ、スクロールしないと見えなくなる危険があった
+      // （数日アプリを開かない間に複数の通常連絡が届くと、重要な
+      // 連絡が埋もれてしまう）。まず重要度で並べ、同じ重要度の中では
+      // 新しい順にする。
+      var PRIORITY = { important: 0, price: 1, project: 1, event: 1, info: 2 };
+      var pa = PRIORITY[a.kind] != null ? PRIORITY[a.kind] : 2;
+      var pb = PRIORITY[b.kind] != null ? PRIORITY[b.kind] : 2;
+      if (pa !== pb) return pa - pb;
+      return String(b.dateRaw).localeCompare(String(a.dateRaw));
     });
   }, [events, readIds]);
   var markRead = function markRead(id) {
     var next = _toConsumableArray(new Set([].concat(_toConsumableArray(readIds), [id])));
     setReadIds(next);
     LS.set(K_READ, next);
+    // 【機能追加・監査で発見】以前は、既読状態が端末（localStorage）
+    // にしか残らず、会社側は「誰が読んだか」を一切確認できなかった。
+    // また、機種変更すると既読情報がまるごと失われていた。
+    // サーバー側にも記録し、会社側で確認できるようにする。
+    // 実績・日報ほど厳密な再送保証はしない（既読の記録が多少遅れても
+    // 業務に致命的な影響は無いため）が、送信自体は試みる。
+    if (driver) {
+      api.upsertRecord("notice_reads", driver.tenantId, {
+        id: "NR-".concat(Date.now(), "-").concat(Math.random().toString(36).slice(2, 7)),
+        noticeId: id,
+        driverId: driver.driverRecordId,
+        readAt: new Date().toISOString()
+      }, undefined).catch(function (e) {
+        console.error("notice_reads upsert error:", e);
+      });
+    }
   };
   var unread = notices.filter(function (n) {
     return !n.isRead;
@@ -6649,6 +7593,25 @@ function App() {
     LS.set(K_DRIVER, d);
   };
   var handleLogout = function handleLogout() {
+    // 【重要・不具合修正】未送信のデータ（まだサーバーに送れていない
+    // 実績・日報）が端末に残ったままログアウトすると、次にこの端末を
+    // 使う人（別のドライバー、あるいは端末を紛失・譲渡した場合の
+    // 第三者）から、前のドライバーの業務データ（配送先・金額等）が
+    // localStorage 上にそのまま残り続けてしまう、情報漏洩のリスクが
+    // あった。かといって、確認せずに黙って削除すると、正当な未送信
+    // データまで失われてしまう。本人に確認し、判断してもらう。
+    var pendingQueue = LS.get(K_QUEUE, []);
+    var pendingQueueSR = LS.get(K_QUEUE_SR, []);
+    var totalPending = pendingQueue.length + pendingQueueSR.length;
+    if (totalPending > 0) {
+      var proceed = window.confirm(
+        "まだ会社に送信されていないデータが".concat(totalPending, "件あります。\n") +
+        "このままログアウトすると、これらのデータは端末から削除され、失われます。\n\n" +
+        "通信環境の良い場所で少し待ってから、もう一度ログアウトすることをおすすめします。\n\n" +
+        "それでも今すぐログアウトしますか？"
+      );
+      if (!proceed) return;
+    }
     // 点検の下書きも必ず消す。消さないと、同じ端末を交代で使う場合に
     // 前のドライバーの未完了の点検内容が、次にログインした人に見えてしまう。
     // 【重要】チャット履歴・乗務日報も、ログアウト時に画面上の状態としては
@@ -6660,11 +7623,16 @@ function App() {
     LS.del(K_SHIFT);
     LS.del(K_PRECHECK_DRAFT);
     LS.del(K_READ);
+    // 【重要・不具合修正】未送信キューも、ログイン情報等と同じく、
+    // 必ずここで削除する（詳しい理由は上記コメントを参照）。
+    LS.del(K_QUEUE);
+    LS.del(K_QUEUE_SR);
     setProfile(null);
     setRecords([]);
     setShiftReports([]);
     setChatMsgs([]);
     setChatReady(false);
+    setPendingCount(0);
     setScreen("home");
   };
 
@@ -6692,8 +7660,12 @@ function App() {
     }, /*#__PURE__*/React.createElement("div", {
       className: frameClass,
       style: PHONE
-    }, /*#__PURE__*/React.createElement(LoginScreen, {
-      onLogin: handleLogin
+    }, preLoginScreen === "reset" ? /*#__PURE__*/React.createElement(ResetPasswordScreen, {
+      onDone: function onDone() { return setPreLoginScreen("login"); },
+      onBack: function onBack() { return setPreLoginScreen("login"); }
+    }) : /*#__PURE__*/React.createElement(LoginScreen, {
+      onLogin: handleLogin,
+      onGoToReset: function onGoToReset() { return setPreLoginScreen("reset"); }
     })));
   }
   var NAV = [{
@@ -6743,6 +7715,13 @@ function App() {
   };
   var isSub = screen in SUB;
   var MoreScreen = function MoreScreen() {
+    // 【機能追加】プロフィール画面を開かないとログアウトできず、
+    // 見つけにくいという指摘があった。「その他」画面に直接
+    // ログアウトボタンを追加する。誤操作を防ぐため確認ダイアログを挟む。
+    var _useStateLO = useState(false),
+      _useStateLO2 = _slicedToArray(_useStateLO, 2),
+      confirmLogout = _useStateLO2[0],
+      setConfirmLogout = _useStateLO2[1];
     var items = [{
       key: "statement",
       icon: "📄",
@@ -6764,7 +7743,9 @@ function App() {
       label: "プロフィール",
       sub: "契約・口座・車両"
     }];
-    return /*#__PURE__*/React.createElement("div", {
+    return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(ScreenHeader, {
+      title: "その他"
+    }), /*#__PURE__*/React.createElement("div", {
       className: "flex-1 overflow-y-auto bg-gray-50 px-4 py-3 flex flex-col gap-3"
     }, /*#__PURE__*/React.createElement(Card, {
       className: "overflow-hidden"
@@ -6772,6 +7753,7 @@ function App() {
       return /*#__PURE__*/React.createElement("button", {
         key: it.key,
         onClick: function onClick() {
+          if (it.key === "notices") return openNotices("more");
           return setScreen(it.key);
         },
         className: "w-full flex items-center gap-3 px-4 py-4 active:bg-gray-50 text-left ".concat(i < items.length - 1 ? "border-b border-gray-100" : "")
@@ -6788,13 +7770,18 @@ function App() {
       }, unread > 9 ? "9+" : unread), /*#__PURE__*/React.createElement("span", {
         className: "text-gray-300 flex-shrink-0"
       }, "\u203A"));
-    })), /*#__PURE__*/React.createElement("a", {
-      href: "https://haisokanri.vercel.app",
-      target: "_blank",
-      rel: "noopener noreferrer",
-      className: "text-center text-[11px] text-gray-400 py-2"
-    }, "\u7BA1\u7406\u753B\u9762\uFF08\u30CF\u30B3\u30DE\u30CD\uFF09\u3092\u958B\u304F \u203A"), /*#__PURE__*/React.createElement("div", {
+    })), /*#__PURE__*/React.createElement("button", {
+      onClick: function onClick() { return setConfirmLogout(true); },
+      className: "w-full text-center text-sm font-bold text-red-500 bg-white rounded-xl border border-gray-200 py-3.5 active:bg-red-50"
+    }, "\u30ED\u30B0\u30A2\u30A6\u30C8"), /*#__PURE__*/React.createElement("div", {
       className: "h-2"
+    })), confirmLogout && /*#__PURE__*/React.createElement(Confirm, {
+      title: "\u30ED\u30B0\u30A2\u30A6\u30C8\u3057\u307E\u3059\u304B\uFF1F",
+      message: "\u672A\u9001\u4FE1\u306E\u5B9F\u7E3E\u304C\u3042\u308C\u3070\u9001\u4FE1\u3055\u308C\u306A\u3044\u307E\u307E\u306B\u306A\u308A\u307E\u3059\u3002",
+      confirmLabel: "\u30ED\u30B0\u30A2\u30A6\u30C8",
+      danger: true,
+      onConfirm: handleLogout,
+      onCancel: function onCancel() { return setConfirmLogout(false); }
     }));
   };
   var render = function render() {
@@ -6807,8 +7794,12 @@ function App() {
           jobTypes: jobTypes,
           notices: notices,
           shift: shift,
+          shiftReports: shiftReports,
           onShiftChange: changeShift,
-          onNav: setScreen,
+          onNav: function onNav(target) {
+            if (target === "notices") return openNotices("home");
+            return setScreen(target);
+          },
           onOpenEntry: function onOpenEntry() {
             setEditingRec(null);
             setEntryOpen(true);
@@ -6816,12 +7807,14 @@ function App() {
           unread: unread,
           offline: offline,
           syncing: syncing,
+          pendingCount: pendingCount,
           company: company
         });
       case "sales":
         return /*#__PURE__*/React.createElement(SalesScreen, {
           records: records,
           jobTypes: jobTypes,
+          onNav: setScreen,
           onEdit: function onEdit(r) {
             setEditingRec(r);
             setEntryOpen(true);
@@ -6833,13 +7826,18 @@ function App() {
           records: records,
           invoices: invoices,
           company: company,
+          onNav: setScreen,
           onSubmitMonth: submitMonth
         });
       case "schedule":
         return /*#__PURE__*/React.createElement(ScheduleScreen, {
           records: records,
           events: events,
-          profile: profile
+          profile: profile,
+          orders: orders,
+          recurringAssignments: recurringAssignments,
+          customers: customers,
+          onNav: setScreen
         });
       case "shift-report-pre":
         return /*#__PURE__*/React.createElement(ShiftReportScreen, {
@@ -6864,7 +7862,8 @@ function App() {
       case "notices":
         return /*#__PURE__*/React.createElement(NoticesScreen, {
           notices: notices,
-          onRead: markRead
+          onRead: markRead,
+          onNav: function onNav() { return setScreen(noticesReturnTo); }
         });
       case "chat":
         return /*#__PURE__*/React.createElement(ChatScreen, {
@@ -6873,21 +7872,24 @@ function App() {
           onSend: sendChat,
           onAttach: attachChat,
           chatReady: chatReady,
-          sending: chatSending
+          sending: chatSending,
+          onNav: setScreen
         });
       case "statement":
         return /*#__PURE__*/React.createElement(StatementScreen, {
           driver: driver,
           profile: profile,
           records: records,
-          company: company
+          company: company,
+          onNav: setScreen
         });
       case "profile":
         return /*#__PURE__*/React.createElement(ProfileScreen, {
           driver: driver,
           profile: profile,
           onSaveSelf: saveSelfProfile,
-          onLogout: handleLogout
+          onLogout: handleLogout,
+          onNav: setScreen
         });
       default:
         return null;
