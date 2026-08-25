@@ -36,12 +36,23 @@
   * { -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
   html, body { margin:0; padding:0; background:#f3f4f6;
     font-family: -apple-system, BlinkMacSystemFont, 'Hiragino Sans', 'Hiragino Kaku Gothic ProN', 'Noto Sans JP', sans-serif;
-    /* 一部の画面で、内容が画面の横幅にわずかに収まっていない不具合が
-       確認されたため、万一どこかの要素が横にはみ出しても、画面全体が
-       横スクロールしてしまわないようにする保険。 */
-    overflow-x: hidden;
+    /* 【不具合の根本修正】これまで、何度か画面下部のナビゲーションが
+       見切れる不具合を、中身の余白調整だけで対応しようとしていたが、
+       毎回微妙な高さのズレで再発していた。
+       根本原因は、html/body自体に「縦方向のスクロールを禁止する」
+       設定が無かったこと。アプリの中身が1pxでも画面の高さからはみ出す
+       と、「ページ全体」がブラウザの通常のスクロール対象になってしまい、
+       ユーザーはページ全体をスライドしないと下部が見えなくなっていた。
+       html/body自体を画面ちょうどの高さに固定し、外側のスクロール自体を
+       禁止することで、中身のズレが起きても、必ずアプリ内部のスクロール
+       領域（flex-1 overflow-y-auto）だけで完結するようにする。 */
+    overflow: hidden;
+    height: 100%;
     max-width: 100vw;
   }
+  html { height: -webkit-fill-available; }
+  body { height: 100vh; height: -webkit-fill-available; }
+  #root { height: 100%; overflow: hidden; }
   input, textarea, select, button { font-family: inherit; }
   button { min-height: 44px; }
 
@@ -3222,12 +3233,14 @@ function VehicleCheckItem(_ref10) {
     className: "grid grid-cols-2 gap-1.5"
   }, /*#__PURE__*/React.createElement("button", {
     onClick: function onClick() {
-      return onChange("repair");
+      // 【機能追加・ユーザー要望】誤って押してしまった場合に取り消せるよう、
+      // 既に選択済みのボタンをもう一度押すと、未回答の状態に戻す。
+      return onChange(value === "repair" ? null : "repair");
     },
     className: "py-2 rounded-lg text-sm font-medium ".concat(value === "repair" ? "bg-red-500 text-white" : "bg-gray-100 text-gray-500")
   }, "\u4FEE\u7406\u5BFE\u5FDC"), /*#__PURE__*/React.createElement("button", {
     onClick: function onClick() {
-      return onChange("ok");
+      return onChange(value === "ok" ? null : "ok");
     },
     className: "py-2 rounded-lg text-sm font-medium ".concat(value === "ok" ? "bg-teal-500 text-white" : "bg-gray-100 text-gray-400")
   }, "\u826F")));
@@ -3664,7 +3677,7 @@ function sendPreCheckToServer(_x3, _x4, _x5) {
 /* ---------- ホーム ---------- */
 function _sendPreCheckToServer() {
   _sendPreCheckToServer = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee26(driver, profile, preCheck) {
-    var payload, _t17;
+    var myId, dateStr, existingRows, existingRow, payload, _t17;
     return _regenerator().w(function (_context27) {
       while (1) switch (_context27.p = _context27.n) {
         case 0:
@@ -3674,9 +3687,26 @@ function _sendPreCheckToServer() {
           }
           return _context27.a(2);
         case 1:
+          myId = (profile === null || profile === void 0 ? void 0 : profile.id) || driver.driverRecordId;
+          dateStr = (preCheck.checkedAt || "").slice(0, 10);
+          _context27.p = 1;
+          // 【重要・不具合修正】以前は常に新規作成（POST）していたため、
+          // 同じ日の乗務前日報を何らかの理由で複数回提出すると、
+          // precheck_records に重複したレコードが積み上がり続けていた。
+          // まず同じドライバー・同じ日の既存レコードを探し、あれば更新する。
+          _context27.n = 2;
+          return api.request("precheck_records", {
+            filter: "?tenant_id=eq.".concat(driver.tenantId, "&payload->>driverId=eq.").concat(encodeURIComponent(myId), "&select=id,payload")
+          });
+        case 2:
+          existingRows = _context27.v || [];
+          existingRow = existingRows.find(function (r) {
+            var _r$payload;
+            return (((_r$payload = r.payload) === null || _r$payload === void 0 ? void 0 : _r$payload.checkedAt) || "").slice(0, 10) === dateStr;
+          });
           payload = {
-            id: "PC-".concat(Date.now(), "-").concat(Math.random().toString(36).slice(2, 7)),
-            driverId: (profile === null || profile === void 0 ? void 0 : profile.id) || driver.driverRecordId,
+            id: existingRow ? existingRow.payload.id : "PC-".concat(Date.now(), "-").concat(Math.random().toString(36).slice(2, 7)),
+            driverId: myId,
             checkedAt: preCheck.checkedAt,
             items: preCheck.items,
             healthCheck: preCheck.healthCheck || null,
@@ -3684,8 +3714,21 @@ function _sendPreCheckToServer() {
             // 車両点検の詳細（必須・任意点検の各項目結果）。未実施ならnull。
             vehicleCheck: preCheck.vehicleCheck || null
           };
-          _context27.p = 2;
+          if (!existingRow) {
+            _context27.n = 4;
+            break;
+          }
           _context27.n = 3;
+          return api.request("precheck_records", {
+            method: "PATCH",
+            filter: "?id=eq.".concat(existingRow.id),
+            body: { payload: payload }
+          });
+        case 3:
+          _context27.n = 5;
+          break;
+        case 4:
+          _context27.n = 5;
           return api.request("precheck_records", {
             method: "POST",
             body: {
@@ -3694,18 +3737,18 @@ function _sendPreCheckToServer() {
               payload: payload
             }
           });
-        case 3:
-          _context27.n = 5;
+        case 5:
+          _context27.n = 7;
           break;
-        case 4:
-          _context27.p = 4;
+        case 6:
+          _context27.p = 6;
           _t17 = _context27.v;
           // テーブル未作成・通信不可でも、点検自体は端末に記録済みなので何もしない
           log.warn("乗務前点検の会社への送信に失敗（任意機能のため無視）", _t17);
-        case 5:
+        case 7:
           return _context27.a(2);
       }
-    }, _callee26, null, [[2, 4]]);
+    }, _callee26, null, [[1, 6]]);
   }));
   return _sendPreCheckToServer.apply(this, arguments);
 }
@@ -3930,10 +3973,6 @@ function HomeScreen(_ref12) {
     _useState26 = _slicedToArray(_useState25, 2),
     confirm = _useState26[0],
     setConfirm = _useState26[1];
-  var _useState27 = useState(false),
-    _useState28 = _slicedToArray(_useState27, 2),
-    preCheckOpen = _useState28[0],
-    setPreCheckOpen = _useState28[1];
   useEffect(function () {
     var t = setInterval(function () {
       return setNow(new Date());
@@ -3983,23 +4022,6 @@ function HomeScreen(_ref12) {
 
   // 点検だけ記録する（稼働開始はしない）。
   // 「乗務前点検をする（任意）」から呼ばれる。
-  var recordPreCheck = function recordPreCheck(preCheck) {
-    setPreCheckOpen(false);
-    onShiftChange(_objectSpread(_objectSpread({}, shift), {}, {
-      preCheck: preCheck
-    }));
-    sendPreCheckToServer(driver, profile, preCheck);
-  };
-  // 点検を終えて、稼働も開始する（未使用だが将来のために残す）
-  var doStart = function doStart(preCheck) {
-    setPreCheckOpen(false);
-    onShiftChange({
-      startAt: new Date().toISOString(),
-      endAt: null,
-      preCheck: preCheck
-    });
-    if (preCheck) sendPreCheckToServer(driver, profile, preCheck);
-  };
   var doEnd = function doEnd() {
     setConfirm(null);
     onShiftChange(_objectSpread(_objectSpread({}, shift), {}, {
@@ -4039,18 +4061,7 @@ function HomeScreen(_ref12) {
   }, /*#__PURE__*/React.createElement("p", {
     className: "text-[11px] text-teal-700 font-bold"
   }, "\u21BB \u4F1A\u793E\u3068\u540C\u671F\u3057\u3066\u3044\u307E\u3059\u2026")),
-  // 【機能追加・監査で発見】「未送信のデータが何件溜まっているか」を
-  // ドライバーが確認する手段が無かった。オフライン中に限らず、常に
-  // pendingCount を見せることで、「保存したつもりが実は会社に
-  // まだ届いていない」ことに、本人がその場で気づけるようにする。
-  !offline && !syncing && pendingCount > 0 && /*#__PURE__*/React.createElement("div", {
-    className: "bg-amber-50 border-b border-amber-300 px-4 py-1.5 flex items-center justify-between gap-2 flex-shrink-0"
-  }, /*#__PURE__*/React.createElement("p", {
-    className: "text-[11px] text-amber-700 font-bold"
-  }, "\u26A0 \u672A\u9001\u4FE1\u306E\u30C7\u30FC\u30BF\u304C".concat(pendingCount, "\u4EF6\u3042\u308A\u307E\u3059")), /*#__PURE__*/React.createElement("button", {
-    onClick: function onClick() { return onRetrySync && onRetrySync(); },
-    className: "flex-shrink-0 bg-amber-500 text-white text-[11px] font-bold rounded-lg px-3 py-1.5 active:bg-amber-600"
-  }, "\u4ECA\u3059\u3050\u9001\u4FE1")), /*#__PURE__*/React.createElement("div", {
+  /*#__PURE__*/React.createElement("div", {
     className: "flex-1 overflow-y-auto px-4 py-1.5 flex flex-col gap-1"
   },
   /* 日付 */
@@ -4064,7 +4075,7 @@ function HomeScreen(_ref12) {
     className: "text-xs text-teal-600 font-bold mt-0.5"
   }, driver.driverName)),
 
-  /* ===== 稼働前：乗務前日報・車両点検 → 稼働開始（両方未完了だと押せない） ===== */
+  /* ===== 稼働前：乗務前日報（車両点検・アルコールチェックも統合済み） → 稼働開始 ===== */
   !started && !finished && /*#__PURE__*/React.createElement(React.Fragment, null,
     /*#__PURE__*/React.createElement("button", {
       onClick: function onClick() { return onNav("shift-report-pre"); },
@@ -4072,46 +4083,26 @@ function HomeScreen(_ref12) {
     }, /*#__PURE__*/React.createElement("div", null,
       /*#__PURE__*/React.createElement("p", {
         className: "text-sm font-bold ".concat(preReportDone ? "text-teal-700" : "text-amber-700")
-      }, "\uD83D\uDE9B \u4E57\u52D9\u524D\u65E5\u5831"),
+      }, "\uD83D\uDE9B \u4E57\u52D9\u524D\u65E5\u5831\uFF08\u8ECA\u4E21\u70B9\u691C\u30FB\u30A2\u30EB\u30B3\u30FC\u30EB\u30C1\u30A7\u30C3\u30AF\u542B\u3080\uFF09"),
       /*#__PURE__*/React.createElement("p", {
         className: "text-[11px] mt-0.5 ".concat(preReportDone ? "text-teal-500" : "text-amber-600")
       }, preReportDone ? "\u2713 \u63D0\u51FA\u6E08\u307F" : "\u7A3C\u50CD\u958B\u59CB\u306B\u306F\u63D0\u51FA\u304C\u5FC5\u8981\u3067\u3059")
     ), /*#__PURE__*/React.createElement("span", {
       className: "text-lg ".concat(preReportDone ? "text-teal-500" : "text-amber-500")
     }, preReportDone ? "\u2713" : "\u203A")),
-    // 【不具合修正・機能復活】以前のホーム画面の全面書き換え時に、
-    // 「車両点検」（アルコールチェック・ブレーキ・タイヤ等の点検項目）
-    // を開くボタンが、誤って削除されてしまっていた。稼働開始ボタンの
-    // onClick では、以前から shift.preCheck（点検結果）を一緒に送る
-    // 設計のままだったのに、その点検結果を入力する入り口が、
-    // 画面のどこにも無い状態になっていた。
     /*#__PURE__*/React.createElement("button", {
-      onClick: function onClick() { return setPreCheckOpen(true); },
-      className: "w-full text-left rounded-xl border-2 px-3 py-2 flex items-center justify-between ".concat(shift.preCheck ? "border-teal-200 bg-teal-50" : "border-amber-300 bg-amber-50")
-    }, /*#__PURE__*/React.createElement("div", null,
-      /*#__PURE__*/React.createElement("p", {
-        className: "text-sm font-bold ".concat(shift.preCheck ? "text-teal-700" : "text-amber-700")
-      }, "\uD83D\uDD27 \u8ECA\u4E21\u70B9\u691C\u30FB\u30A2\u30EB\u30B3\u30FC\u30EB\u30C1\u30A7\u30C3\u30AF"),
-      /*#__PURE__*/React.createElement("p", {
-        className: "text-[11px] mt-0.5 ".concat(shift.preCheck ? "text-teal-500" : "text-amber-600")
-      }, shift.preCheck ? "\u2713 \u5B9F\u65BD\u6E08\u307F" : "\u7A3C\u50CD\u958B\u59CB\u306B\u306F\u5B9F\u65BD\u304C\u5FC5\u8981\u3067\u3059")
-    ), /*#__PURE__*/React.createElement("span", {
-      className: "text-lg ".concat(shift.preCheck ? "text-teal-500" : "text-amber-500")
-    }, shift.preCheck ? "\u2713" : "\u203A")),
-    /*#__PURE__*/React.createElement("button", {
-      disabled: !preReportDone || !shift.preCheck,
+      disabled: !preReportDone,
       onClick: function onClick() {
         return onShiftChange({
           startAt: new Date().toISOString(),
-          endAt: null,
-          preCheck: shift.preCheck || null
+          endAt: null
         });
       },
-      className: "w-full font-black text-lg rounded-xl py-2.5 shadow-md ".concat(preReportDone && shift.preCheck ? "bg-teal-500 text-white active:bg-teal-600" : "bg-gray-200 text-gray-400")
+      className: "w-full font-black text-lg rounded-xl py-2.5 shadow-md ".concat(preReportDone ? "bg-teal-500 text-white active:bg-teal-600" : "bg-gray-200 text-gray-400")
     }, "\u7A3C\u50CD\u958B\u59CB"),
-    (!preReportDone || !shift.preCheck) && /*#__PURE__*/React.createElement("p", {
+    !preReportDone && /*#__PURE__*/React.createElement("p", {
       className: "text-[11px] text-gray-400 text-center -mt-1"
-    }, "\u4E57\u52D9\u524D\u65E5\u5831\u3068\u8ECA\u4E21\u70B9\u691C\u3092\u5B8C\u4E86\u3059\u308B\u3068\u7A3C\u50CD\u3092\u958B\u59CB\u3067\u304D\u307E\u3059")
+    }, "\u4E57\u52D9\u524D\u65E5\u5831\u3092\u63D0\u51FA\u3059\u308B\u3068\u7A3C\u50CD\u3092\u958B\u59CB\u3067\u304D\u307E\u3059")
   ),
 
   /* ===== 稼働中：乗務後日報 → 配送実績入力 → 稼働終了（両方確定しないと押せない） ===== */
@@ -4199,10 +4190,7 @@ function HomeScreen(_ref12) {
     }, n.message));
   })), /*#__PURE__*/React.createElement("div", {
     className: "h-2"
-  })), preCheckOpen && /*#__PURE__*/React.createElement(PreCheckSheet, {
-    onComplete: recordPreCheck,
-    onClose: function onClose() { return setPreCheckOpen(false); }
-  }), confirm === "end" && /*#__PURE__*/React.createElement(Confirm, {
+  })), confirm === "end" && /*#__PURE__*/React.createElement(Confirm, {
     title: "\u7A3C\u50CD\u3092\u7D42\u4E86\u3057\u307E\u3059\u304B\uFF1F",
     message: todayRecs.length === 0 ? "⚠️ 本日の配送実績がまだ入力されていません。\n実績を入れないと売上・報酬に反映されません。" : "\u672C\u65E5\u306E\u5B9F\u7E3E\uFF1A".concat(todayRecs.length, "\u4EF6"),
     confirmLabel: "\u7A3C\u50CD\u7D42\u4E86",
@@ -5283,6 +5271,7 @@ function StatementScreen(_ref31) {
 function ShiftReportScreen(_ref100) {
   var type = _ref100.type,
     driver = _ref100.driver,
+    profile = _ref100.profile,
     shift = _ref100.shift,
     shiftReports = _ref100.shiftReports,
     onSave = _ref100.onSave,
@@ -5309,6 +5298,11 @@ function ShiftReportScreen(_ref100) {
     // 義務付けられている。以前はこの項目自体が無かった。
     restTaken: null, restLoc: "", restH: "", restM: "",
     highway: null, forklift: null, abnormal: null, abnormalNote: "", memo: "",
+    // 【機能変更・ユーザー要望】以前は「車両点検・アルコールチェック」を
+    // 独立したボタン・モーダルとして分けていたが、乗務前日報の中の
+    // タブとして統合してほしいという要望により、ここに一本化する。
+    healthVals: {}, alcoholDetectorUsed: null,
+    reqVals: {}, optVals: {}, prevAbnormal: null, prevNote: "", precheckNote: "",
   };
   var _useState_sr1 = useState(existing ? _objectSpread(_objectSpread({}, emptyForm), existing) : emptyForm),
     _useState_sr2 = _slicedToArray(_useState_sr1, 2),
@@ -5327,8 +5321,25 @@ function ShiftReportScreen(_ref100) {
   var _useState_sr7 = useState("record"),
     _useState_sr8 = _slicedToArray(_useState_sr7, 2),
     tab = _useState_sr8[0], setTab = _useState_sr8[1];
+  // 【機能追加・ユーザー要望】任意点検は、必須点検より項目数が多く、
+  // 画面が長くなりがちなため、トグルで開閉できるようにし、既定では
+  // 隠しておく。ただし、既に「修理対応」（異常あり）の回答が
+  // 記録されている場合は、その情報を見落とさないよう、最初から開いておく。
+  var _useState_sr9 = useState(function () {
+      return Object.values((form.optVals || {})).some(function (v) { return v === "repair"; });
+    }),
+    _useState_sr10 = _slicedToArray(_useState_sr9, 2),
+    showOptionalCheck = _useState_sr10[0], setShowOptionalCheck = _useState_sr10[1];
 
   var handleSubmit = function handleSubmit() {
+    // 【安全のための最優先チェック】アルコールが確認された場合は、
+    // 日報自体を提出させない。提出できてしまうと「日報を出したから
+    // 稼働してよい」と誤解される危険があるため。
+    if (isPre && form.healthVals && form.healthVals[0] === "bad") {
+      setTab("precheck");
+      alert("アルコールが確認されているため、提出できません。\n運転できません。ただちに会社に連絡してください。");
+      return;
+    }
     // 【重要】「*」を付けた必須項目が、実際には何もチェックされないまま
     // 空欄で提出できてしまっていた（元のファイルも同様だったが、
     // 表示上「必須」と示している以上、実際に確認するべき箇所）。
@@ -5337,11 +5348,23 @@ function ShiftReportScreen(_ref100) {
     // 切り替えることで「どこを直せばいいか分からない」を防ぐ。
     var missingRecord = [];
     var missingCargo = [];
+    var missingPrecheck = [];
     if (isPre) {
       if (!form.vehicle) missingRecord.push("車両番号");
       if (!form.departureLoc) missingRecord.push("出庫地");
       if (!form.odometerOut) missingRecord.push("出庫時メーター");
       if (!form.weather) missingRecord.push("天気");
+      // 【機能追加・ユーザー要望】車両点検・アルコールチェックを統合したため、
+      // これらも乗務前日報の必須項目として検証する。
+      HEALTH_CHECKS.forEach(function (label, i) {
+        if (!(form.healthVals || {})[i]) missingPrecheck.push(label);
+      });
+      if (form.alcoholDetectorUsed == null) missingPrecheck.push("アルコールチェックの実施");
+      var allReqLabels = REQUIRED_VEHICLE_CHECKS.flatMap(function (s) { return s.items; });
+      allReqLabels.forEach(function (label, i) {
+        if (!(form.reqVals || {})[i]) missingPrecheck.push(label);
+      });
+      if (!form.prevAbnormal) missingPrecheck.push("前回運行の異状確認");
     } else {
       if (!form.depH || !form.depM) missingRecord.push("出庫時間");
       if (!form.retH || !form.retM) missingRecord.push("帰庫時間");
@@ -5357,9 +5380,9 @@ function ShiftReportScreen(_ref100) {
         if (!c.status) missingCargo.push("積載状況".concat(i + 1));
       });
     }
-    var missing = missingRecord.concat(missingCargo);
+    var missing = missingRecord.concat(missingPrecheck).concat(missingCargo);
     if (missing.length > 0) {
-      setTab(missingRecord.length > 0 ? "record" : "cargo");
+      setTab(missingRecord.length > 0 ? "record" : missingPrecheck.length > 0 ? "precheck" : "cargo");
       alert("次の必須項目が未入力です：\n".concat(missing.join("、")));
       return;
     }
@@ -5405,6 +5428,28 @@ function ShiftReportScreen(_ref100) {
     if (!isPre) payload.cargo = cargo;
     payload[isPre ? "preSubmittedAt" : "postSubmittedAt"] = new Date().toISOString();
     onSave(payload, existing && existing._dbId);
+    // 【機能追加・ユーザー要望】車両点検・アルコールチェックを乗務前日報に
+    // 統合したが、ハコマネ側の「稼働記録・日報」閲覧画面は、引き続き
+    // precheck_records テーブルを見ているため、そちらにも同じ内容を送る。
+    if (isPre) {
+      var allReqLabels2 = REQUIRED_VEHICLE_CHECKS.flatMap(function (s) { return s.items; });
+      var allOptLabels2 = OPTIONAL_VEHICLE_CHECKS.flatMap(function (s) { return s.items; });
+      sendPreCheckToServer(driver, profile, {
+        checkedAt: new Date().toISOString(),
+        items: { health: true, appearance: true, vehicle: true },
+        healthCheck: {
+          items: HEALTH_CHECKS.map(function (label, i) { return { label: label, value: (form.healthVals || {})[i] }; }),
+          alcoholDetectorUsed: form.alcoholDetectorUsed
+        },
+        note: form.precheckNote || "",
+        vehicleCheck: {
+          required: allReqLabels2.map(function (label, i) { return { label: label, value: (form.reqVals || {})[i] }; }),
+          optional: allOptLabels2.map(function (label, i) { return { label: label, value: (form.optVals || {})[i] }; }),
+          prevAbnormal: form.prevAbnormal,
+          prevNote: form.prevNote || ""
+        }
+      });
+    }
     setSubmitted(true);
   };
 
@@ -5460,7 +5505,7 @@ function ShiftReportScreen(_ref100) {
         /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 border-b border-gray-100" }, /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-400" }, "帰庫時間", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")), /*#__PURE__*/React.createElement("div", { className: "flex items-center gap-1 mt-1" }, /*#__PURE__*/React.createElement("input", { value: form.retH, onChange: function onChange(e) { return f("retH", e.target.value); }, placeholder: "17", maxLength: 2, className: "w-14 border border-gray-300 rounded px-2 py-1 text-sm text-center" }), /*#__PURE__*/React.createElement("span", { className: "text-gray-400" }, ":"), /*#__PURE__*/React.createElement("input", { value: form.retM, onChange: function onChange(e) { return f("retM", e.target.value); }, placeholder: "00", maxLength: 2, className: "w-14 border border-gray-300 rounded px-2 py-1 text-sm text-center" }))),
         /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 border-b border-gray-100" }, /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-400" }, "帰庫地", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")), /*#__PURE__*/React.createElement("input", { value: form.returnLoc, onChange: function onChange(e) { return f("returnLoc", e.target.value); }, className: "w-full border border-gray-200 rounded px-2 py-1 text-sm mt-1" })),
         /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 border-b border-gray-100" }, /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-400" }, "経過地"), /*#__PURE__*/React.createElement("input", { value: form.via, onChange: function onChange(e) { return f("via", e.target.value); }, className: "w-full border border-gray-200 rounded px-2 py-1 text-sm mt-1" })),
-        /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 border-b border-gray-100" }, /*#__PURE__*/React.createElement("p", { className: "text-xs font-bold text-gray-600" }, "■給油"), /*#__PURE__*/React.createElement("div", { className: "flex items-center gap-2 mt-1" }, /*#__PURE__*/React.createElement("input", { value: form.fuelAmount, onChange: function onChange(e) { return f("fuelAmount", e.target.value); }, placeholder: "給油量", className: "flex-1 border border-gray-200 rounded px-2 py-1 text-sm text-right" }), /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-500" }, "L"), /*#__PURE__*/React.createElement("input", { value: form.fuelOdometer, onChange: function onChange(e) { return f("fuelOdometer", e.target.value); }, placeholder: "給油時メーター", className: "flex-1 border border-gray-200 rounded px-2 py-1 text-sm text-right" }), /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-500" }, "km"))),
+        /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 border-b border-gray-100" }, /*#__PURE__*/React.createElement("p", { className: "text-xs font-bold text-gray-600" }, "■給油"), /*#__PURE__*/React.createElement("div", { className: "flex items-center gap-1.5 mt-1" }, /*#__PURE__*/React.createElement("input", { value: form.fuelAmount, onChange: function onChange(e) { return f("fuelAmount", e.target.value); }, placeholder: "給油量", className: "flex-1 min-w-0 border border-gray-200 rounded px-2 py-1 text-sm text-right" }), /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-500 flex-shrink-0" }, "L"), /*#__PURE__*/React.createElement("input", { value: form.fuelOdometer, onChange: function onChange(e) { return f("fuelOdometer", e.target.value); }, placeholder: "給油時メーター", className: "flex-1 min-w-0 border border-gray-200 rounded px-2 py-1 text-sm text-right" }), /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-500 flex-shrink-0" }, "km"))),
         /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 border-b border-gray-100" }, /*#__PURE__*/React.createElement("p", { className: "text-xs font-bold text-gray-600" }, "■走行距離"), /*#__PURE__*/React.createElement("div", { className: "flex items-center justify-between mt-1" }, /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-400" }, "出庫メーター", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")), /*#__PURE__*/React.createElement("div", { className: "flex items-center gap-1" }, /*#__PURE__*/React.createElement("input", { value: form.odometerOut, onChange: function onChange(e) { return f("odometerOut", e.target.value); }, className: "w-24 border border-gray-200 rounded px-2 py-1 text-sm text-right" }), /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-500" }, "km"))), /*#__PURE__*/React.createElement("div", { className: "flex items-center justify-between mt-1.5" }, /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-400" }, "帰庫メーター", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")), /*#__PURE__*/React.createElement("div", { className: "flex items-center gap-1" }, /*#__PURE__*/React.createElement("input", { value: form.odometerIn, onChange: function onChange(e) { return f("odometerIn", e.target.value); }, className: "w-24 border border-gray-200 rounded px-2 py-1 text-sm text-right" }), /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-500" }, "km")))),
         // 【機能追加・法令調査で発見】休憩・仮眠をとった場合の地点・日時は、
         // 業務記録（運転日報）の必須記録項目。
@@ -5472,6 +5517,80 @@ function ShiftReportScreen(_ref100) {
           form.abnormal === "yes" && /*#__PURE__*/React.createElement("textarea", { value: form.abnormalNote, onChange: function onChange(e) { return f("abnormalNote", e.target.value); }, rows: 2, placeholder: "遅延・事故の概要及び、原因について記入", className: "w-full border border-gray-200 rounded px-2 py-1.5 text-xs mt-2 resize-none" })),
         /*#__PURE__*/React.createElement("div", { className: "px-3 py-2" }, /*#__PURE__*/React.createElement("p", { className: "text-xs font-bold text-gray-600" }, "■記事・メモ"), /*#__PURE__*/React.createElement("textarea", { value: form.memo, onChange: function onChange(e) { return f("memo", e.target.value); }, rows: 3, className: "w-full border border-gray-200 rounded px-2 py-1.5 text-sm mt-1 resize-none" })));
 
+
+  // 【機能追加・ユーザー要望】車両点検・アルコールチェックを、乗務前日報の
+  // 中の1タブとして統合。以前は独立したボタン・モーダル（PreCheckSheet）
+  // だったが、まとめて1回の提出で完結するようにする。
+  var allRequiredVehicle = REQUIRED_VEHICLE_CHECKS.flatMap(function (s) { return s.items; });
+  var allOptionalVehicle = OPTIONAL_VEHICLE_CHECKS.flatMap(function (s) { return s.items; });
+  var setHealthVal = function (i, v) { setForm(function (p) { return _objectSpread(_objectSpread({}, p), {}, { healthVals: _objectSpread(_objectSpread({}, p.healthVals), {}, _defineProperty({}, i, v)) }); }); };
+  var setReqVal = function (i, v) { setForm(function (p) { return _objectSpread(_objectSpread({}, p), {}, { reqVals: _objectSpread(_objectSpread({}, p.reqVals), {}, _defineProperty({}, i, v)) }); }); };
+  var setOptVal = function (i, v) { setForm(function (p) { return _objectSpread(_objectSpread({}, p), {}, { optVals: _objectSpread(_objectSpread({}, p.optVals), {}, _defineProperty({}, i, v)) }); }); };
+  var alcoholDetected = form.healthVals && form.healthVals[0] === "bad";
+  var vehicleHasRepairFlag = Object.values(form.reqVals || {}).some(function (v) { return v === "repair"; }) || Object.values(form.optVals || {}).some(function (v) { return v === "repair"; }) || form.prevAbnormal === "repair";
+
+  var precheckTabContent = /*#__PURE__*/React.createElement("div", { className: "space-y-3" },
+    /*#__PURE__*/React.createElement("div", { className: "bg-white rounded-xl border border-gray-200 overflow-hidden" },
+      /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 bg-gray-50 border-b border-gray-100" }, /*#__PURE__*/React.createElement("p", { className: "text-xs font-bold text-gray-700" }, "■飲酒・健康状態確認")),
+      /*#__PURE__*/React.createElement("div", { className: "divide-y divide-gray-100" }, HEALTH_CHECKS.map(function (label, i) {
+        return /*#__PURE__*/React.createElement("div", { key: label, className: "px-3 py-2.5" },
+          /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-700 mb-1.5" }, label, /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")),
+          /*#__PURE__*/React.createElement("div", { className: "grid grid-cols-2 gap-1.5" },
+            /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return setHealthVal(i, (form.healthVals || {})[i] === "bad" ? null : "bad"); }, className: "py-2 rounded-lg text-sm font-medium ".concat((form.healthVals || {})[i] === "bad" ? "bg-red-500 text-white" : "bg-gray-100 text-gray-500") }, "不良"),
+            /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return setHealthVal(i, (form.healthVals || {})[i] === "ok" ? null : "ok"); }, className: "py-2 rounded-lg text-sm font-medium ".concat((form.healthVals || {})[i] === "ok" ? "bg-teal-500 text-white" : "bg-gray-100 text-gray-400") }, "良")));
+      })),
+      /*#__PURE__*/React.createElement("div", { className: "px-3 py-2.5 border-t border-gray-100" },
+        /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-700 mb-1.5" }, "アルコールチェックをしましたか（検知器使用）", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")),
+        /*#__PURE__*/React.createElement("div", { className: "grid grid-cols-2 gap-1.5" },
+          /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return f("alcoholDetectorUsed", form.alcoholDetectorUsed === false ? null : false); }, className: "py-2 rounded-lg text-sm font-medium ".concat(form.alcoholDetectorUsed === false ? "bg-gray-400 text-white" : "bg-gray-100 text-gray-500") }, "使用していない"),
+          /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return f("alcoholDetectorUsed", form.alcoholDetectorUsed === true ? null : true); }, className: "py-2 rounded-lg text-sm font-medium ".concat(form.alcoholDetectorUsed === true ? "bg-teal-500 text-white" : "bg-gray-100 text-gray-400") }, "使用した"))),
+      alcoholDetected && /*#__PURE__*/React.createElement("div", { className: "mx-3 mb-3 bg-red-50 border-2 border-red-300 rounded-xl px-4 py-3" },
+        /*#__PURE__*/React.createElement("p", { className: "text-sm font-black text-red-700" }, "🚫 アルコールが確認されました"),
+        /*#__PURE__*/React.createElement("p", { className: "text-xs text-red-600 mt-1 leading-relaxed" }, /*#__PURE__*/React.createElement("b", null, "運転できません。"), "絶対に乗務しないでください。", /*#__PURE__*/React.createElement("br", null), "ただちに会社に連絡してください。"))),
+    /*#__PURE__*/React.createElement("div", { className: "bg-white rounded-xl border border-gray-200 overflow-hidden" },
+      /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 bg-gray-50 border-b border-gray-100 flex items-center justify-between" },
+        /*#__PURE__*/React.createElement("p", { className: "text-xs font-bold text-gray-700" }, "■車両点検"),
+        /*#__PURE__*/React.createElement("p", { className: "text-[11px] text-gray-400" }, "（*）：必須項目")),
+      (function () {
+        var idx = 0;
+        return REQUIRED_VEHICLE_CHECKS.map(function (section) {
+          return /*#__PURE__*/React.createElement("div", { key: section.section },
+            /*#__PURE__*/React.createElement("div", { className: "px-3 py-1.5 bg-gray-50/50" }, /*#__PURE__*/React.createElement("p", { className: "text-[11px] font-bold text-gray-500" }, section.section, /*#__PURE__*/React.createElement("span", { className: "text-red-500 ml-0.5" }, "*"))),
+            /*#__PURE__*/React.createElement("div", { className: "px-3 divide-y divide-gray-100" }, section.items.map(function (label) {
+              var i = idx++;
+              return /*#__PURE__*/React.createElement(VehicleCheckItem, { key: label, label: label, value: (form.reqVals || {})[i], onChange: function onChange(v) { return setReqVal(i, v); } });
+            })));
+        });
+      })(),
+      /*#__PURE__*/React.createElement("button", {
+        onClick: function onClick() { return setShowOptionalCheck(function (v) { return !v; }); },
+        className: "w-full flex items-center justify-between px-3 py-2 mt-1 bg-gray-50 rounded-lg"
+      }, /*#__PURE__*/React.createElement("span", { className: "text-[11px] font-bold text-gray-500" }, "\u4EFB\u610F\u70B9\u691C", Object.values(form.optVals || {}).filter(function (v) { return v != null; }).length > 0 ? "\uFF08".concat(Object.values(form.optVals || {}).filter(function (v) { return v != null; }).length, "\u4EF6\u56DE\u7B54\u6E08\u307F\uFF09") : ""),
+        /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-400" }, showOptionalCheck ? "\u25B2 \u9589\u3058\u308B" : "\u25BC \u958B\u304F")),
+      showOptionalCheck && (function () {
+        var idx = 0;
+        return OPTIONAL_VEHICLE_CHECKS.map(function (section) {
+          return /*#__PURE__*/React.createElement("div", { key: section.section },
+            /*#__PURE__*/React.createElement("div", { className: "px-3 py-1.5 bg-gray-50/50" }, /*#__PURE__*/React.createElement("p", { className: "text-[11px] font-bold text-gray-500" }, section.section)),
+            /*#__PURE__*/React.createElement("div", { className: "px-3 divide-y divide-gray-100" }, section.items.map(function (label) {
+              var i = idx++;
+              return /*#__PURE__*/React.createElement(VehicleCheckItem, { key: label, label: label, value: (form.optVals || {})[i], onChange: function onChange(v) { return setOptVal(i, v); } });
+            })));
+        });
+      })(),
+      /*#__PURE__*/React.createElement("div", { className: "px-3 py-2.5 border-t border-gray-100" },
+        /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-700 mb-1.5" }, "前回の運行において異状がないこと", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")),
+        /*#__PURE__*/React.createElement("div", { className: "grid grid-cols-2 gap-1.5 mb-2" },
+          /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return f("prevAbnormal", form.prevAbnormal === "repair" ? null : "repair"); }, className: "py-2 rounded-lg text-sm font-medium ".concat(form.prevAbnormal === "repair" ? "bg-red-500 text-white" : "bg-gray-100 text-gray-500") }, "修理対応"),
+          /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return f("prevAbnormal", form.prevAbnormal === "ok" ? null : "ok"); }, className: "py-2 rounded-lg text-sm font-medium ".concat(form.prevAbnormal === "ok" ? "bg-teal-500 text-white" : "bg-gray-100 text-gray-400") }, "良")),
+        form.prevAbnormal === "repair" && /*#__PURE__*/React.createElement("textarea", { value: form.prevNote, onChange: function onChange(e) { return f("prevNote", e.target.value); }, rows: 2, placeholder: "異状箇所の詳細を入力", className: "w-full border border-gray-200 rounded px-2 py-1.5 text-xs resize-none" })),
+      vehicleHasRepairFlag && /*#__PURE__*/React.createElement("div", { className: "m-3 bg-amber-50 border-2 border-amber-300 rounded-xl px-4 py-3" },
+        /*#__PURE__*/React.createElement("p", { className: "text-xs font-bold text-amber-800" }, "⚠「修理対応」の項目があります"),
+        /*#__PURE__*/React.createElement("p", { className: "text-[11px] text-amber-600 mt-1 leading-relaxed" }, "乗務前に会社へご連絡のうえ、指示を仰いでください。"))),
+    /*#__PURE__*/React.createElement("div", { className: "px-1" },
+      /*#__PURE__*/React.createElement("p", { className: "text-xs font-bold text-gray-600 mb-1" }, "特記事項（任意）"),
+      /*#__PURE__*/React.createElement("input", { value: form.precheckNote, onChange: function onChange(e) { return f("precheckNote", e.target.value); }, placeholder: "例：右前タイヤの空気圧がやや低め", className: "w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" })));
+
   var cargoTabContent = /*#__PURE__*/React.createElement("div", {
     className: "space-y-3"
   }, cargo.map(function (c, i) {
@@ -5482,10 +5601,10 @@ function ShiftReportScreen(_ref100) {
       /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 divide-y divide-gray-100" },
         /*#__PURE__*/React.createElement("div", { className: "pb-2" }, /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-500 mb-1" }, "積載状況", i + 1, /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")), /*#__PURE__*/React.createElement("div", { className: "grid grid-cols-2 gap-1.5" }, /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return setCg(i, "status", "no"); }, className: "py-2 rounded text-sm ".concat(c.status === "no" ? "bg-gray-400 text-white" : "bg-gray-100 text-gray-500") }, "否"), /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return setCg(i, "status", "ok"); }, className: "py-2 rounded text-sm ".concat(c.status === "ok" ? "bg-red-400 text-white" : "bg-gray-100 text-gray-400") }, "良"))),
         /*#__PURE__*/React.createElement("div", { className: "py-2" }, /*#__PURE__*/React.createElement("input", { value: c.type, onChange: function onChange(e) { return setCg(i, "type", e.target.value); }, placeholder: "積荷の種類", className: "w-full border border-gray-200 rounded px-2 py-1.5 text-sm" })),
-        /*#__PURE__*/React.createElement("div", { className: "pt-2 flex items-center gap-2" }, /*#__PURE__*/React.createElement("input", { value: c.weight, onChange: function onChange(e) { return setCg(i, "weight", e.target.value); }, placeholder: "\u7A4D\u8F09\u91CD\u91CF".concat(i + 1), className: "flex-1 border border-gray-200 rounded px-2 py-1.5 text-sm text-right" }), /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-500" }, "t"), /*#__PURE__*/React.createElement("input", { value: c.ratio, onChange: function onChange(e) { return setCg(i, "ratio", e.target.value); }, placeholder: "\u7A4D\u8F09\u5272\u5408".concat(i + 1), className: "flex-1 border border-gray-200 rounded px-2 py-1.5 text-sm text-right" }), /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-500" }, "%"))));
+        /*#__PURE__*/React.createElement("div", { className: "pt-2 flex items-center gap-1.5" }, /*#__PURE__*/React.createElement("input", { value: c.weight, onChange: function onChange(e) { return setCg(i, "weight", e.target.value); }, placeholder: "\u7A4D\u8F09\u91CD\u91CF".concat(i + 1), className: "flex-1 min-w-0 border border-gray-200 rounded px-2 py-1.5 text-sm text-right" }), /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-500 flex-shrink-0" }, "t"), /*#__PURE__*/React.createElement("input", { value: c.ratio, onChange: function onChange(e) { return setCg(i, "ratio", e.target.value); }, placeholder: "\u7A4D\u8F09\u5272\u5408".concat(i + 1), className: "flex-1 min-w-0 border border-gray-200 rounded px-2 py-1.5 text-sm text-right" }), /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-500 flex-shrink-0" }, "%"))));
   }));
 
-  var tabs = isPre ? [] : [["record", "乗務記録"], ["cargo", "積荷"]];
+  var tabs = isPre ? [["record", "乗務記録"], ["precheck", "車両点検・アルコール"]] : [["record", "乗務記録"], ["cargo", "積荷"]];
 
   return /*#__PURE__*/React.createElement("div", {
     className: "flex flex-col bg-gray-50 h-full"
@@ -5498,7 +5617,7 @@ function ShiftReportScreen(_ref100) {
     }, "‹ 戻る"), /*#__PURE__*/React.createElement("p", {
       className: "flex-1 text-center text-sm font-bold text-gray-700 pr-8"
     }, isPre ? "乗務前日報" : "乗務後日報")),
-    !isPre && /*#__PURE__*/React.createElement("div", {
+    /*#__PURE__*/React.createElement("div", {
       className: "bg-white border-b border-gray-200 flex-shrink-0 flex"
     }, tabs.map(function (_ref101) {
       var _ref102 = _slicedToArray(_ref101, 2), key = _ref102[0], label = _ref102[1];
@@ -5511,7 +5630,8 @@ function ShiftReportScreen(_ref100) {
     /*#__PURE__*/React.createElement("div", {
       className: "flex-1 overflow-y-auto px-3 py-3 space-y-3"
     }, /*#__PURE__*/React.createElement("p", { className: "text-right text-xs text-red-500" }, "（*）：必須項目"),
-      (isPre || tab === "record") && recordTabContent,
+      tab === "record" && recordTabContent,
+      isPre && tab === "precheck" && precheckTabContent,
       !isPre && tab === "cargo" && cargoTabContent,
       /*#__PURE__*/React.createElement("div", { className: "h-4" })),
     /*#__PURE__*/React.createElement("div", {
@@ -7873,7 +7993,7 @@ function App() {
   var isPhone = typeof window !== "undefined" && window.innerWidth <= 500;
   var PHONE = isPhone ? {
     width: "100%",
-    height: "100dvh",
+    height: "100%",
     maxWidth: "none",
     maxHeight: "none"
   } : {
@@ -8074,6 +8194,7 @@ function App() {
         return /*#__PURE__*/React.createElement(ShiftReportScreen, {
           type: "pre",
           driver: driver,
+          profile: profile,
           shift: shift,
           shiftReports: shiftReports,
           onSave: saveShiftReport,
@@ -8141,7 +8262,8 @@ function App() {
     }
   }, /*#__PURE__*/React.createElement("button", {
     onClick: function onClick() {
-      return setScreen(screen === "chat" || screen === "statement" || screen === "profile" || screen === "notices" ? "more" : "home");
+      if (screen === "notices") return setScreen(noticesReturnTo);
+      return setScreen(screen === "chat" || screen === "statement" || screen === "profile" ? "more" : "home");
     },
     className: "text-teal-600 font-bold text-sm min-h-0 z-10"
   }, "\u2039 \u623B\u308B"), /*#__PURE__*/React.createElement("h1", {
