@@ -54,11 +54,14 @@
   input, textarea, select, button { font-family: inherit; }
   button { min-height: 44px; }
 
-  /* ホーム画面から全画面で起動したとき、iPhone の時計やホームバーに
-     画面が隠れてしまうのを防ぐ（画面下のボタンが押せなくなる）。 */
+  /* ホーム画面から全画面で起動したとき、iPhone の時計に画面が隠れて
+     しまうのを防ぐ（上部の安全領域のみ、ここでbodyに適用する）。
+     下部の安全領域（ホームバー避け）は、body ではなく、ナビゲーション
+     バー自体に適用する（body に適用すると、アプリのフレーム全体が
+     縮んでしまい、ナビゲーションバーが画面の絶対的な下端より上に
+     来てしまい、その下に不要な余白ができてしまうため）。 */
   body {
     padding-top: env(safe-area-inset-top);
-    padding-bottom: env(safe-area-inset-bottom);
   }
   /* 全画面時は「スマホの枠」風の余白を消して、画面いっぱいに使う */
   @media (display-mode: standalone) {
@@ -2474,6 +2477,11 @@ var K_QUEUE = "hakolog_queue_v4";
 // キューも独立させておく（混ざると、実績の再送処理が誤って
 // 日報のデータを送ってしまうような事故を防ぐため）。
 var K_QUEUE_SR = "hakolog_queue_sr_v1";
+// 【機能追加・ユーザー要望】乗務前日報・乗務後日報を、まだ全部入力し
+// 終わっていない途中で、いったん他の画面（配送予定の確認等）に移動
+// できるよう、「一時保存」機能のための下書き保存キー。
+// 乗務前・乗務後・日付ごとに、別々の下書きとして保持する。
+var K_SR_DRAFT = "hakolog_sr_draft_v1";
 
 /* ══════════════ 3. calc（ハコマネと完全一致させること） ══════════════ */
 
@@ -5280,33 +5288,65 @@ function ShiftReportScreen(_ref100) {
   var existing = (shiftReports || []).find(function (r) {
     return r.date === todayStr && r.driverId === driverId;
   }) || null;
+  // 【機能追加・ユーザー要望】一時保存（下書き）の読み込み。
+  // サーバーに確定データ（existing）が既にある場合は、そちらを優先する
+  // （下書きより、確定して送信済みのデータの方が、常により確実なため）。
+  var draftKey = "".concat(K_SR_DRAFT, "_").concat(driverId, "_").concat(todayStr, "_").concat(type);
+  var draft = !existing ? LS.get(draftKey, null) : null;
 
   var emptyForm = {
     vehicle: "", departureLoc: "", odometerOut: "", weather: null,
-    depH: "", depM: "", retH: "", retM: "", returnLoc: "車庫", via: "",
-    fuelAmount: "", fuelOdometer: "", odometerIn: "",
+    depH: "", depM: "", retH: "", retM: "", returnLoc: "車庫",
+    odometerIn: "",
     // 【機能追加・法令調査で発見】貨物自動車運送事業輸送安全規則第8条
     // （2025年4月より軽貨物にも適用）により、「休憩や仮眠をとった場合、
     // その地点と日時」は、業務記録（運転日報）の記録項目として
     // 義務付けられている。以前はこの項目自体が無かった。
-    restTaken: null, restLoc: "", restH: "", restM: "",
-    highway: null, forklift: null, abnormal: null, abnormalNote: "", memo: "",
+    restTaken: null, restLoc: "", restH: "", restM: "", restEndH: "", restEndM: "",
+    abnormal: null, abnormalNote: "", memo: "",
+    // 【機能追加・法令に基づく再設計】「主な経過地点（集荷や納品を行った
+    // 場所と、それぞれの着・発時刻）」は、業務記録の必須記録項目だが、
+    // 以前は「経過地」という、時刻情報を持たない自由記述1つだけだった。
+    // 場所ごとに、複数の地点を、到着・出発時刻とともに記録できるようにする。
+    waypoints: [],
+    // 【機能追加・法令に基づく再設計】荷主都合による30分以上の待機や、
+    // 荷役作業を行った場合、条件付きで記録が義務付けられている。
+    // 該当しない日が大半のため、あった場合だけ詳細を記録する形にする。
+    shipperWaitTaken: null, shipperWaitLoc: "", shipperWaitContent: "",
+    shipperWaitStartH: "", shipperWaitStartM: "", shipperWaitEndH: "", shipperWaitEndM: "",
     // 【機能変更・ユーザー要望】以前は「車両点検・アルコールチェック」を
     // 独立したボタン・モーダルとして分けていたが、乗務前日報の中の
     // タブとして統合してほしいという要望により、ここに一本化する。
     healthVals: {}, alcoholDetectorUsed: null,
     reqVals: {}, optVals: {}, prevAbnormal: null, prevNote: "", precheckNote: "",
+    // 【機能追加・点呼記録簿に基づく再設計】点呼記録簿には、健康状態・
+    // アルコールチェックの結果だけでなく、「誰が点呼を行ったか」
+    // 「対面か、その他の方法か」「指示した事項」も、必須の記録項目として
+    // 定められているが、以前はこれらの記録が一切無かった。
+    // 点呼執行者は、多くの場合ドライバー自身（1人で事業を行っている場合）
+    // が行うため、ログイン中のドライバー名を初期値にしておく。
+    callExecutor: driver.driverName || "", callMethod: null, callMethodOther: "",
+    callInstruction: "",
+    // 【機能追加・点呼記録簿に基づく再設計】点呼は業務前だけでなく、
+    // 業務後にも行うことが義務付けられているが、以前は乗務後日報に、
+    // アルコールチェック自体が存在しなかった（重大な記録漏れ）。
+    postCallExecutor: driver.driverName || "", postCallMethod: null, postCallMethodOther: "",
+    postAlcoholDetectorUsed: null, postAlcoholStatus: null, postCallInstruction: "",
   };
-  var _useState_sr1 = useState(existing ? _objectSpread(_objectSpread({}, emptyForm), existing) : emptyForm),
+  var _useState_sr1 = useState(existing ? _objectSpread(_objectSpread({}, emptyForm), existing) : draft ? _objectSpread(_objectSpread({}, emptyForm), draft) : emptyForm),
     _useState_sr2 = _slicedToArray(_useState_sr1, 2),
     form = _useState_sr2[0], setForm = _useState_sr2[1];
   var f = function f(k, v) { setForm(function (p) { return _objectSpread(_objectSpread({}, p), {}, _defineProperty({}, k, v)); }); };
 
-  var emptyCargo = { status: null, type: "", weight: "", ratio: "" };
-  var _useState_sr3 = useState(existing && existing.cargo ? existing.cargo : [_objectSpread({}, emptyCargo), _objectSpread({}, emptyCargo)]),
-    _useState_sr4 = _slicedToArray(_useState_sr3, 2),
-    cargo = _useState_sr4[0], setCargo = _useState_sr4[1];
-  var setCg = function setCg(i, k, v) { setCargo(function (p) { return p.map(function (c, j) { return j === i ? _objectSpread(_objectSpread({}, c), {}, _defineProperty({}, k, v)) : c; }); }); };
+  var addWaypoint = function addWaypoint() {
+    return setForm(function (p) { return _objectSpread(_objectSpread({}, p), {}, { waypoints: [].concat(_toConsumableArray(p.waypoints || []), [{ loc: "", arrH: "", arrM: "", depH: "", depM: "" }]) }); });
+  };
+  var removeWaypoint = function removeWaypoint(i) {
+    return setForm(function (p) { return _objectSpread(_objectSpread({}, p), {}, { waypoints: (p.waypoints || []).filter(function (_, j) { return j !== i; }) }); });
+  };
+  var setWaypoint = function setWaypoint(i, k, v) {
+    return setForm(function (p) { return _objectSpread(_objectSpread({}, p), {}, { waypoints: (p.waypoints || []).map(function (w, j) { return j === i ? _objectSpread(_objectSpread({}, w), {}, _defineProperty({}, k, v)) : w; }) }); });
+  };
 
   var _useState_sr5 = useState(false),
     _useState_sr6 = _slicedToArray(_useState_sr5, 2),
@@ -5317,9 +5357,11 @@ function ShiftReportScreen(_ref100) {
   // 【機能追加・ユーザー要望】任意点検は、必須点検より項目数が多く、
   // 画面が長くなりがちなため、トグルで開閉できるようにし、既定では
   // 隠しておく。ただし、既に「修理対応」（異常あり）の回答が
-  // 記録されている場合は、その情報を見落とさないよう、最初から開いておく。
+  // 記録されている場合や、「前回の運行において異状がないこと」が
+  // まだ未回答の場合（この項目自体は必須のまま、任意点検のセクション
+  // に移動したため）は、見落とさないよう、最初から開いておく。
   var _useState_sr9 = useState(function () {
-      return Object.values((form.optVals || {})).some(function (v) { return v === "repair"; });
+      return Object.values((form.optVals || {})).some(function (v) { return v === "repair"; }) || !form.prevAbnormal;
     }),
     _useState_sr10 = _slicedToArray(_useState_sr9, 2),
     showOptionalCheck = _useState_sr10[0], setShowOptionalCheck = _useState_sr10[1];
@@ -5333,14 +5375,20 @@ function ShiftReportScreen(_ref100) {
       alert("アルコールが確認されているため、提出できません。\n運転できません。ただちに会社に連絡してください。");
       return;
     }
+    // 【機能追加・点呼記録簿に基づく再設計】業務後点呼でも、酒気帯びが
+    // 確認された場合は、業務前と同じ考え方で、提出をブロックする。
+    if (!isPre && form.postAlcoholStatus === "bad") {
+      alert("アルコールが確認されているため、提出できません。\nただちに会社に連絡してください。");
+      return;
+    }
     // 【重要】「*」を付けた必須項目が、実際には何もチェックされないまま
     // 空欄で提出できてしまっていた（元のファイルも同様だったが、
     // 表示上「必須」と示している以上、実際に確認するべき箇所）。
-    // 乗務後日報は「乗務記録」「積荷」の2タブに分かれているため、
+    // 乗務後日報は「乗務記録」「経過地点・待機」の2タブに分かれているため、
     // どちらのタブに不足があるか分けて把握し、そちらに自動で
     // 切り替えることで「どこを直せばいいか分からない」を防ぐ。
     var missingRecord = [];
-    var missingCargo = [];
+    var missingWaypoints = [];
     var missingPrecheck = [];
     if (isPre) {
       if (!form.vehicle) missingRecord.push("車両番号");
@@ -5358,6 +5406,11 @@ function ShiftReportScreen(_ref100) {
         if (!(form.reqVals || {})[i]) missingPrecheck.push(label);
       });
       if (!form.prevAbnormal) missingPrecheck.push("前回運行の異状確認");
+      // 【機能追加・点呼記録簿に基づく再設計】点呼執行者・点呼方法も、
+      // 点呼記録簿の必須記録項目。
+      if (!form.callExecutor) missingPrecheck.push("点呼執行者");
+      if (!form.callMethod) missingPrecheck.push("点呼方法");
+      if (form.callMethod === "other" && !form.callMethodOther) missingPrecheck.push("点呼方法（その他の内容）");
     } else {
       if (!form.depH || !form.depM) missingRecord.push("出庫時間");
       if (!form.retH || !form.retM) missingRecord.push("帰庫時間");
@@ -5365,17 +5418,30 @@ function ShiftReportScreen(_ref100) {
       if (!form.odometerOut) missingRecord.push("出庫メーター");
       if (!form.odometerIn) missingRecord.push("帰庫メーター");
       if (!form.restTaken) missingRecord.push("休憩・仮眠の有無");
-      if (form.restTaken === "yes" && (!form.restLoc || !form.restH || !form.restM)) missingRecord.push("休憩の場所・時刻");
-      if (!form.highway) missingRecord.push("高速道路の使用");
-      if (!form.forklift) missingRecord.push("フォークリフトの使用");
+      if (form.restTaken === "yes" && (!form.restLoc || !form.restH || !form.restM || !form.restEndH || !form.restEndM)) missingRecord.push("休憩の場所・時刻");
       if (!form.abnormal) missingRecord.push("異常の有無");
-      cargo.forEach(function (c, i) {
-        if (!c.status) missingCargo.push("積載状況".concat(i + 1));
-      });
+      // 【機能追加・点呼記録簿に基づく再設計】点呼は業務前だけでなく、
+      // 業務後にも義務付けられているが、以前は乗務後日報に、この記録が
+      // 一切無かった（重大な記録漏れ）。業務前点呼と同じ考え方で、
+      // 点呼執行者・点呼方法・アルコールチェックの実施を必須にする。
+      if (!form.postCallExecutor) missingRecord.push("業務後点呼：点呼執行者");
+      if (!form.postCallMethod) missingRecord.push("業務後点呼：点呼方法");
+      if (form.postCallMethod === "other" && !form.postCallMethodOther) missingRecord.push("業務後点呼：点呼方法（その他の内容）");
+      if (form.postAlcoholDetectorUsed == null) missingRecord.push("業務後点呼：アルコールチェックの実施");
+      if (!form.postAlcoholStatus) missingRecord.push("業務後点呼：酒気帯びの有無");
+      // 【機能追加・法令に基づく再設計】荷主都合の待機・荷役作業は、
+      // 該当する場合のみ、条件付きで記録が義務付けられている。
+      // 「あったかどうか」自体の確認は必須とし、「あり」の場合は、
+      // 場所・時刻・内容も必須にする。経過地点自体は、直行便など、
+      // 無いケースも普通にあるため、登録は任意（0件でも提出できる）。
+      if (!form.shipperWaitTaken) missingWaypoints.push("荷主都合の待機・荷役作業の有無");
+      if (form.shipperWaitTaken === "yes" && (!form.shipperWaitLoc || !form.shipperWaitContent || !form.shipperWaitStartH || !form.shipperWaitStartM || !form.shipperWaitEndH || !form.shipperWaitEndM)) {
+        missingWaypoints.push("荷主都合の待機・荷役作業の詳細（場所・時刻・内容）");
+      }
     }
-    var missing = missingRecord.concat(missingPrecheck).concat(missingCargo);
+    var missing = missingRecord.concat(missingPrecheck).concat(missingWaypoints);
     if (missing.length > 0) {
-      setTab(missingRecord.length > 0 ? "record" : missingPrecheck.length > 0 ? "precheck" : "cargo");
+      setTab(missingRecord.length > 0 ? "record" : missingPrecheck.length > 0 ? "precheck" : "waypoints");
       alert("次の必須項目が未入力です：\n".concat(missing.join("、")));
       return;
     }
@@ -5389,8 +5455,6 @@ function ShiftReportScreen(_ref100) {
     var numericFields = [
       ["odometerOut", "出庫時メーター"],
       ["odometerIn", "帰庫メーター"],
-      ["fuelOdometer", "給油時メーター"],
-      ["fuelAmount", "給油量"],
     ];
     for (var i = 0; i < numericFields.length; i++) {
       var fKey = numericFields[i][0];
@@ -5416,11 +5480,18 @@ function ShiftReportScreen(_ref100) {
     var payload = _objectSpread(_objectSpread(_objectSpread({}, existing || {}), form), {}, {
       id: (existing && existing.id) || "SR-".concat(Date.now()),
       driverId: driverId,
+      // 【機能追加・法令に基づく再設計】「運転者氏名」は、業務記録の
+      // 必須記録項目。ドライバーに再入力させず、ログイン情報から
+      // 自動的に記録に含める。
+      driverName: driver.driverName || "",
       date: todayStr,
     });
-    if (!isPre) payload.cargo = cargo;
     payload[isPre ? "preSubmittedAt" : "postSubmittedAt"] = new Date().toISOString();
     onSave(payload, existing && existing._dbId);
+    // 【機能追加・ユーザー要望】提出が完了したら、一時保存していた
+    // 下書きは、もう不要になるため削除する（残り続けると、次回、
+    // 古い内容が誤って復元されてしまう可能性があるため）。
+    LS.del(draftKey);
     // 【機能追加・ユーザー要望】車両点検・アルコールチェックを乗務前日報に
     // 統合したが、ハコマネ側の「稼働記録・日報」閲覧画面は、引き続き
     // precheck_records テーブルを見ているため、そちらにも同じ内容を送る。
@@ -5494,20 +5565,41 @@ function ShiftReportScreen(_ref100) {
     : /*#__PURE__*/React.createElement("div", {
         className: "bg-white rounded-xl border border-gray-200 overflow-hidden"
       },
-        /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 border-b border-gray-100" }, /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-400" }, "出庫時間", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")), /*#__PURE__*/React.createElement("div", { className: "flex items-center gap-1 mt-1" }, /*#__PURE__*/React.createElement("input", { value: form.depH, onChange: function onChange(e) { return f("depH", e.target.value); }, placeholder: "09", maxLength: 2, className: "w-14 border border-gray-300 rounded px-2 py-1 text-sm text-center" }), /*#__PURE__*/React.createElement("span", { className: "text-gray-400" }, ":"), /*#__PURE__*/React.createElement("input", { value: form.depM, onChange: function onChange(e) { return f("depM", e.target.value); }, placeholder: "00", maxLength: 2, className: "w-14 border border-gray-300 rounded px-2 py-1 text-sm text-center" }))),
-        /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 border-b border-gray-100" }, /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-400" }, "帰庫時間", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")), /*#__PURE__*/React.createElement("div", { className: "flex items-center gap-1 mt-1" }, /*#__PURE__*/React.createElement("input", { value: form.retH, onChange: function onChange(e) { return f("retH", e.target.value); }, placeholder: "17", maxLength: 2, className: "w-14 border border-gray-300 rounded px-2 py-1 text-sm text-center" }), /*#__PURE__*/React.createElement("span", { className: "text-gray-400" }, ":"), /*#__PURE__*/React.createElement("input", { value: form.retM, onChange: function onChange(e) { return f("retM", e.target.value); }, placeholder: "00", maxLength: 2, className: "w-14 border border-gray-300 rounded px-2 py-1 text-sm text-center" }))),
+        /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 border-b border-gray-100" }, /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-400" }, "出庫時間", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")), /*#__PURE__*/React.createElement("div", { className: "flex items-center gap-1 mt-1" }, /*#__PURE__*/React.createElement("input", { value: form.depH, onChange: function onChange(e) { return f("depH", e.target.value); }, placeholder: "09", maxLength: 2, className: "border border-gray-300 rounded px-2 py-1 text-sm text-center", style: { width: "56px" } }), /*#__PURE__*/React.createElement("span", { className: "text-gray-400" }, ":"), /*#__PURE__*/React.createElement("input", { value: form.depM, onChange: function onChange(e) { return f("depM", e.target.value); }, placeholder: "00", maxLength: 2, className: "border border-gray-300 rounded px-2 py-1 text-sm text-center", style: { width: "56px" } }))),
+        /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 border-b border-gray-100" }, /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-400" }, "帰庫時間", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")), /*#__PURE__*/React.createElement("div", { className: "flex items-center gap-1 mt-1" }, /*#__PURE__*/React.createElement("input", { value: form.retH, onChange: function onChange(e) { return f("retH", e.target.value); }, placeholder: "17", maxLength: 2, className: "border border-gray-300 rounded px-2 py-1 text-sm text-center", style: { width: "56px" } }), /*#__PURE__*/React.createElement("span", { className: "text-gray-400" }, ":"), /*#__PURE__*/React.createElement("input", { value: form.retM, onChange: function onChange(e) { return f("retM", e.target.value); }, placeholder: "00", maxLength: 2, className: "border border-gray-300 rounded px-2 py-1 text-sm text-center", style: { width: "56px" } }))),
         /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 border-b border-gray-100" }, /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-400" }, "帰庫地", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")), /*#__PURE__*/React.createElement("input", { value: form.returnLoc, onChange: function onChange(e) { return f("returnLoc", e.target.value); }, className: "w-full border border-gray-200 rounded px-2 py-1 text-sm mt-1" })),
-        /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 border-b border-gray-100" }, /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-400" }, "経過地"), /*#__PURE__*/React.createElement("input", { value: form.via, onChange: function onChange(e) { return f("via", e.target.value); }, className: "w-full border border-gray-200 rounded px-2 py-1 text-sm mt-1" })),
-        /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 border-b border-gray-100" }, /*#__PURE__*/React.createElement("p", { className: "text-xs font-bold text-gray-600" }, "■給油"), /*#__PURE__*/React.createElement("div", { className: "flex items-center gap-1.5 mt-1" }, /*#__PURE__*/React.createElement("input", { value: form.fuelAmount, onChange: function onChange(e) { return f("fuelAmount", e.target.value); }, placeholder: "給油量", className: "flex-1 min-w-0 border border-gray-200 rounded px-2 py-1 text-sm text-right" }), /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-500 flex-shrink-0" }, "L"), /*#__PURE__*/React.createElement("input", { value: form.fuelOdometer, onChange: function onChange(e) { return f("fuelOdometer", e.target.value); }, placeholder: "給油時メーター", className: "flex-1 min-w-0 border border-gray-200 rounded px-2 py-1 text-sm text-right" }), /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-500 flex-shrink-0" }, "km"))),
-        /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 border-b border-gray-100" }, /*#__PURE__*/React.createElement("p", { className: "text-xs font-bold text-gray-600" }, "■走行距離"), /*#__PURE__*/React.createElement("div", { className: "flex items-center justify-between mt-1" }, /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-400" }, "出庫メーター", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")), /*#__PURE__*/React.createElement("div", { className: "flex items-center gap-1" }, /*#__PURE__*/React.createElement("input", { value: form.odometerOut, onChange: function onChange(e) { return f("odometerOut", e.target.value); }, className: "w-24 border border-gray-200 rounded px-2 py-1 text-sm text-right" }), /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-500" }, "km"))), /*#__PURE__*/React.createElement("div", { className: "flex items-center justify-between mt-1.5" }, /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-400" }, "帰庫メーター", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")), /*#__PURE__*/React.createElement("div", { className: "flex items-center gap-1" }, /*#__PURE__*/React.createElement("input", { value: form.odometerIn, onChange: function onChange(e) { return f("odometerIn", e.target.value); }, className: "w-24 border border-gray-200 rounded px-2 py-1 text-sm text-right" }), /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-500" }, "km")))),
+        /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 border-b border-gray-100" }, /*#__PURE__*/React.createElement("p", { className: "text-xs font-bold text-gray-600" }, "■走行距離"), /*#__PURE__*/React.createElement("div", { className: "flex items-center justify-between mt-1" }, /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-400" }, "出庫メーター", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")), /*#__PURE__*/React.createElement("div", { className: "flex items-center gap-1" }, /*#__PURE__*/React.createElement("input", { value: form.odometerOut, onChange: function onChange(e) { return f("odometerOut", e.target.value); }, className: "border border-gray-200 rounded px-2 py-1 text-sm text-right", style: { width: "96px" } }), /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-500" }, "km"))), /*#__PURE__*/React.createElement("div", { className: "flex items-center justify-between mt-1.5" }, /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-400" }, "帰庫メーター", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")), /*#__PURE__*/React.createElement("div", { className: "flex items-center gap-1" }, /*#__PURE__*/React.createElement("input", { value: form.odometerIn, onChange: function onChange(e) { return f("odometerIn", e.target.value); }, className: "border border-gray-200 rounded px-2 py-1 text-sm text-right", style: { width: "96px" } }), /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-500" }, "km")))),
         // 【機能追加・法令調査で発見】休憩・仮眠をとった場合の地点・日時は、
         // 業務記録（運転日報）の必須記録項目。
-        /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 border-b border-gray-100" }, /*#__PURE__*/React.createElement("p", { className: "text-xs font-bold text-gray-600" }, "\u2588\u4F11\u61A9\u30FB\u4EEE\u7720", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")), /*#__PURE__*/React.createElement("div", { className: "grid grid-cols-2 gap-1.5 mt-1" }, /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return f("restTaken", "no"); }, className: "py-2 rounded text-sm ".concat(form.restTaken === "no" ? "bg-gray-400 text-white" : "bg-gray-100 text-gray-500") }, "\u306A\u3057"), /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return f("restTaken", "yes"); }, className: "py-2 rounded text-sm ".concat(form.restTaken === "yes" ? "bg-teal-500 text-white" : "bg-gray-100 text-gray-400") }, "\u3042\u308A")), form.restTaken === "yes" && /*#__PURE__*/React.createElement("div", { className: "mt-2 flex flex-col gap-1.5" }, /*#__PURE__*/React.createElement("input", { value: form.restLoc, onChange: function onChange(e) { return f("restLoc", e.target.value); }, placeholder: "\u4F11\u61A9\u3057\u305F\u5834\u6240\uFF08\u4F8B\uFF1A\u25EF\u25EF\u30B5\u30FC\u30D3\u30B9\u30A8\u30EA\u30A2\uFF09", className: "w-full border border-gray-200 rounded px-2 py-1.5 text-sm" }), /*#__PURE__*/React.createElement("div", { className: "flex items-center gap-1" }, /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-400 flex-shrink-0" }, "\u6642\u523B"), /*#__PURE__*/React.createElement("input", { value: form.restH, onChange: function onChange(e) { return f("restH", e.target.value); }, placeholder: "12", maxLength: 2, className: "w-14 border border-gray-300 rounded px-2 py-1 text-sm text-center" }), /*#__PURE__*/React.createElement("span", { className: "text-gray-400" }, ":"), /*#__PURE__*/React.createElement("input", { value: form.restM, onChange: function onChange(e) { return f("restM", e.target.value); }, placeholder: "00", maxLength: 2, className: "w-14 border border-gray-300 rounded px-2 py-1 text-sm text-center" })))),
-        /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 border-b border-gray-100" }, /*#__PURE__*/React.createElement("p", { className: "text-xs font-bold text-gray-600" }, "■道路、運行の状況"),
-          yesNoButtons("highway", "高速道路の使用"),
-          yesNoButtons("forklift", "フォークリフトの使用"),
+        /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 border-b border-gray-100" }, /*#__PURE__*/React.createElement("p", { className: "text-xs font-bold text-gray-600" }, "\u2588\u4F11\u61A9\u30FB\u4EEE\u7720", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")), /*#__PURE__*/React.createElement("div", { className: "grid grid-cols-2 gap-1.5 mt-1" }, /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return f("restTaken", "no"); }, className: "py-2 rounded text-sm ".concat(form.restTaken === "no" ? "bg-gray-400 text-white" : "bg-gray-100 text-gray-500") }, "\u306A\u3057"), /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return f("restTaken", "yes"); }, className: "py-2 rounded text-sm ".concat(form.restTaken === "yes" ? "bg-teal-500 text-white" : "bg-gray-100 text-gray-400") }, "\u3042\u308A")), form.restTaken === "yes" && /*#__PURE__*/React.createElement("div", { className: "mt-2 flex flex-col gap-1.5" }, /*#__PURE__*/React.createElement("input", { value: form.restLoc, onChange: function onChange(e) { return f("restLoc", e.target.value); }, placeholder: "\u4F11\u61A9\u3057\u305F\u5834\u6240\uFF08\u4F8B\uFF1A\u25EF\u25EF\u30B5\u30FC\u30D3\u30B9\u30A8\u30EA\u30A2\uFF09", className: "w-full border border-gray-200 rounded px-2 py-1.5 text-sm" }), /*#__PURE__*/React.createElement("div", { className: "flex items-center gap-1" }, /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-400 flex-shrink-0", style: { width: "32px" } }, "\u958B\u59CB"), /*#__PURE__*/React.createElement("input", { value: form.restH, onChange: function onChange(e) { return f("restH", e.target.value); }, placeholder: "12", maxLength: 2, className: "border border-gray-300 rounded px-2 py-1 text-sm text-center", style: { width: "56px" } }), /*#__PURE__*/React.createElement("span", { className: "text-gray-400" }, ":"), /*#__PURE__*/React.createElement("input", { value: form.restM, onChange: function onChange(e) { return f("restM", e.target.value); }, placeholder: "00", maxLength: 2, className: "border border-gray-300 rounded px-2 py-1 text-sm text-center", style: { width: "56px" } })), /*#__PURE__*/React.createElement("div", { className: "flex items-center gap-1" }, /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-400 flex-shrink-0", style: { width: "32px" } }, "\u7D42\u4E86"), /*#__PURE__*/React.createElement("input", { value: form.restEndH, onChange: function onChange(e) { return f("restEndH", e.target.value); }, placeholder: "12", maxLength: 2, className: "border border-gray-300 rounded px-2 py-1 text-sm text-center", style: { width: "56px" } }), /*#__PURE__*/React.createElement("span", { className: "text-gray-400" }, ":"), /*#__PURE__*/React.createElement("input", { value: form.restEndM, onChange: function onChange(e) { return f("restEndM", e.target.value); }, placeholder: "30", maxLength: 2, className: "border border-gray-300 rounded px-2 py-1 text-sm text-center", style: { width: "56px" } })))),
+        /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 border-b border-gray-100" }, /*#__PURE__*/React.createElement("p", { className: "text-xs font-bold text-gray-600" }, "■運行状況"),
           yesNoButtons("abnormal", "異常"),
           form.abnormal === "yes" && /*#__PURE__*/React.createElement("textarea", { value: form.abnormalNote, onChange: function onChange(e) { return f("abnormalNote", e.target.value); }, rows: 2, placeholder: "遅延・事故の概要及び、原因について記入", className: "w-full border border-gray-200 rounded px-2 py-1.5 text-xs mt-2 resize-none" })),
+        // 【機能追加・点呼記録簿に基づく再設計】業務後点呼は、以前は
+        // 記録項目自体が存在しなかった（点呼記録簿には業務前・業務後の
+        // 両方が必須と定められている）。業務前と同じ考え方で追加する。
+        /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 border-b border-gray-100" },
+          /*#__PURE__*/React.createElement("p", { className: "text-xs font-bold text-gray-600 mb-1.5" }, "■業務後点呼"),
+          /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-700 mb-1" }, "点呼執行者", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")),
+          /*#__PURE__*/React.createElement("input", { value: form.postCallExecutor, onChange: function onChange(e) { return f("postCallExecutor", e.target.value); }, placeholder: "\u70B9\u547C\u3092\u884C\u3063\u305F\u4EBA\u306E\u6C0F\u540D", className: "w-full border border-gray-200 rounded px-2 py-1.5 text-sm mb-2" }),
+          /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-700 mb-1" }, "点呼方法", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")),
+          /*#__PURE__*/React.createElement("div", { className: "grid grid-cols-2 gap-1.5 mb-2" },
+            /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return f("postCallMethod", form.postCallMethod === "faceToFace" ? null : "faceToFace"); }, className: "py-2 rounded-lg text-sm font-medium ".concat(form.postCallMethod === "faceToFace" ? "bg-teal-500 text-white" : "bg-gray-100 text-gray-500") }, "\u5BFE\u9762"),
+            /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return f("postCallMethod", form.postCallMethod === "other" ? null : "other"); }, className: "py-2 rounded-lg text-sm font-medium ".concat(form.postCallMethod === "other" ? "bg-teal-500 text-white" : "bg-gray-100 text-gray-500") }, "\u305D\u306E\u4ED6")),
+          form.postCallMethod === "other" && /*#__PURE__*/React.createElement("input", { value: form.postCallMethodOther, onChange: function onChange(e) { return f("postCallMethodOther", e.target.value); }, placeholder: "\u5177\u4F53\u7684\u306A\u65B9\u6CD5\uFF08\u4F8B\uFF1A\u96FB\u8A71\u3001\u30D3\u30C7\u30AA\u901A\u8A71\uFF09", className: "w-full border border-gray-200 rounded px-2 py-1.5 text-sm mb-2" }),
+          /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-700 mb-1" }, "アルコールチェックをしましたか（検知器使用）", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")),
+          /*#__PURE__*/React.createElement("div", { className: "grid grid-cols-2 gap-1.5 mb-2" },
+            /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return f("postAlcoholDetectorUsed", form.postAlcoholDetectorUsed === false ? null : false); }, className: "py-2 rounded-lg text-sm font-medium ".concat(form.postAlcoholDetectorUsed === false ? "bg-gray-400 text-white" : "bg-gray-100 text-gray-500") }, "\u4F7F\u7528\u3057\u3066\u3044\u306A\u3044"),
+            /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return f("postAlcoholDetectorUsed", form.postAlcoholDetectorUsed === true ? null : true); }, className: "py-2 rounded-lg text-sm font-medium ".concat(form.postAlcoholDetectorUsed === true ? "bg-teal-500 text-white" : "bg-gray-100 text-gray-400") }, "\u4F7F\u7528\u3057\u305F")),
+          /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-700 mb-1" }, "\u9152\u6C17\u5E2F\u3073\u306F\u3042\u308A\u307E\u305B\u3093\u304B", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")),
+          /*#__PURE__*/React.createElement("div", { className: "grid grid-cols-2 gap-1.5 mb-2" },
+            /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return f("postAlcoholStatus", form.postAlcoholStatus === "bad" ? null : "bad"); }, className: "py-2 rounded-lg text-sm font-medium ".concat(form.postAlcoholStatus === "bad" ? "bg-red-500 text-white" : "bg-gray-100 text-gray-500") }, "\u3042\u308A"),
+            /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return f("postAlcoholStatus", form.postAlcoholStatus === "ok" ? null : "ok"); }, className: "py-2 rounded-lg text-sm font-medium ".concat(form.postAlcoholStatus === "ok" ? "bg-teal-500 text-white" : "bg-gray-100 text-gray-400") }, "\u306A\u3057")),
+          form.postAlcoholStatus === "bad" && /*#__PURE__*/React.createElement("div", { className: "bg-red-50 border-2 border-red-300 rounded-xl px-3 py-2 mb-2" },
+            /*#__PURE__*/React.createElement("p", { className: "text-xs font-black text-red-700" }, "\uD83D\uDEAB \u30A2\u30EB\u30B3\u30FC\u30EB\u304C\u78BA\u8A8D\u3055\u308C\u307E\u3057\u305F"),
+            /*#__PURE__*/React.createElement("p", { className: "text-[11px] text-red-600 mt-1" }, "\u305F\u3060\u3061\u306B\u4F1A\u793E\u306B\u9023\u7D61\u3057\u3066\u304F\u3060\u3055\u3044\u3002")),
+          /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-700 mb-1" }, "\u6307\u793A\u4E8B\u9805\u30FB\u305D\u306E\u4ED6\u5FC5\u8981\u306A\u4E8B\u9805\uFF08\u4EFB\u610F\uFF09"),
+          /*#__PURE__*/React.createElement("input", { value: form.postCallInstruction, onChange: function onChange(e) { return f("postCallInstruction", e.target.value); }, placeholder: "\u4F8B\uFF1A\u660E\u65E5\u306E\u96C6\u8377\u5834\u6240\u306B\u3064\u3044\u3066\u306E\u9023\u7D61", className: "w-full border border-gray-200 rounded px-2 py-1.5 text-sm" })),
         /*#__PURE__*/React.createElement("div", { className: "px-3 py-2" }, /*#__PURE__*/React.createElement("p", { className: "text-xs font-bold text-gray-600" }, "■記事・メモ"), /*#__PURE__*/React.createElement("textarea", { value: form.memo, onChange: function onChange(e) { return f("memo", e.target.value); }, rows: 3, className: "w-full border border-gray-200 rounded px-2 py-1.5 text-sm mt-1 resize-none" })));
 
 
@@ -5571,7 +5663,7 @@ function ShiftReportScreen(_ref100) {
             })));
         });
       })(),
-      /*#__PURE__*/React.createElement("div", { className: "px-3 py-2.5 border-t border-gray-100" },
+      showOptionalCheck && /*#__PURE__*/React.createElement("div", { className: "px-3 py-2.5 border-t border-gray-100" },
         /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-700 mb-1.5" }, "前回の運行において異状がないこと", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")),
         /*#__PURE__*/React.createElement("div", { className: "grid grid-cols-2 gap-1.5 mb-2" },
           /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return f("prevAbnormal", form.prevAbnormal === "repair" ? null : "repair"); }, className: "py-2 rounded-lg text-sm font-medium ".concat(form.prevAbnormal === "repair" ? "bg-red-500 text-white" : "bg-gray-100 text-gray-500") }, "修理対応"),
@@ -5580,24 +5672,55 @@ function ShiftReportScreen(_ref100) {
       vehicleHasRepairFlag && /*#__PURE__*/React.createElement("div", { className: "m-3 bg-amber-50 border-2 border-amber-300 rounded-xl px-4 py-3" },
         /*#__PURE__*/React.createElement("p", { className: "text-xs font-bold text-amber-800" }, "⚠「修理対応」の項目があります"),
         /*#__PURE__*/React.createElement("p", { className: "text-[11px] text-amber-600 mt-1 leading-relaxed" }, "乗務前に会社へご連絡のうえ、指示を仰いでください。"))),
+    // 【機能追加・点呼記録簿に基づく再設計】点呼記録簿の必須項目である、
+    // 「点呼執行者」「点呼方法」「指示事項」を記録する。
+    /*#__PURE__*/React.createElement("div", { className: "bg-white rounded-xl border border-gray-200 overflow-hidden" },
+      /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 bg-gray-50 border-b border-gray-100" }, /*#__PURE__*/React.createElement("p", { className: "text-xs font-bold text-gray-700" }, "■点呼記録")),
+      /*#__PURE__*/React.createElement("div", { className: "px-3 py-2.5 border-b border-gray-100" },
+        /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-700 mb-1.5" }, "点呼執行者", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")),
+        /*#__PURE__*/React.createElement("input", { value: form.callExecutor, onChange: function onChange(e) { return f("callExecutor", e.target.value); }, placeholder: "\u70B9\u547C\u3092\u884C\u3063\u305F\u4EBA\u306E\u6C0F\u540D", className: "w-full border border-gray-200 rounded px-2 py-1.5 text-sm" })),
+      /*#__PURE__*/React.createElement("div", { className: "px-3 py-2.5 border-b border-gray-100" },
+        /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-700 mb-1.5" }, "点呼方法", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")),
+        /*#__PURE__*/React.createElement("div", { className: "grid grid-cols-2 gap-1.5" },
+          /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return f("callMethod", form.callMethod === "faceToFace" ? null : "faceToFace"); }, className: "py-2 rounded-lg text-sm font-medium ".concat(form.callMethod === "faceToFace" ? "bg-teal-500 text-white" : "bg-gray-100 text-gray-500") }, "\u5BFE\u9762"),
+          /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return f("callMethod", form.callMethod === "other" ? null : "other"); }, className: "py-2 rounded-lg text-sm font-medium ".concat(form.callMethod === "other" ? "bg-teal-500 text-white" : "bg-gray-100 text-gray-500") }, "\u305D\u306E\u4ED6")),
+        form.callMethod === "other" && /*#__PURE__*/React.createElement("input", { value: form.callMethodOther, onChange: function onChange(e) { return f("callMethodOther", e.target.value); }, placeholder: "\u5177\u4F53\u7684\u306A\u65B9\u6CD5\uFF08\u4F8B\uFF1A\u96FB\u8A71\u3001\u30D3\u30C7\u30AA\u901A\u8A71\uFF09", className: "w-full border border-gray-200 rounded px-2 py-1.5 text-sm mt-2" })),
+      /*#__PURE__*/React.createElement("div", { className: "px-3 py-2.5" },
+        /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-700 mb-1.5" }, "指示事項・その他必要な事項（任意）"),
+        /*#__PURE__*/React.createElement("input", { value: form.callInstruction, onChange: function onChange(e) { return f("callInstruction", e.target.value); }, placeholder: "\u4F8B\uFF1A\u672C\u65E5\u306F\u96EA\u306E\u305F\u3081\u5F90\u884C\u904B\u8EE2\u3092\u5FC3\u304C\u3051\u308B", className: "w-full border border-gray-200 rounded px-2 py-1.5 text-sm" }))),
     /*#__PURE__*/React.createElement("div", { className: "px-1" },
       /*#__PURE__*/React.createElement("p", { className: "text-xs font-bold text-gray-600 mb-1" }, "特記事項（任意）"),
       /*#__PURE__*/React.createElement("input", { value: form.precheckNote, onChange: function onChange(e) { return f("precheckNote", e.target.value); }, placeholder: "例：右前タイヤの空気圧がやや低め", className: "w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" })));
 
-  var cargoTabContent = /*#__PURE__*/React.createElement("div", {
-    className: "space-y-3"
-  }, cargo.map(function (c, i) {
-    return /*#__PURE__*/React.createElement("div", {
-      key: i,
-      className: "bg-white rounded-xl border border-gray-200 overflow-hidden"
-    }, /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 bg-gray-50 border-b border-gray-100" }, /*#__PURE__*/React.createElement("p", { className: "text-xs font-bold text-gray-700" }, "積荷", i + 1)),
-      /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 divide-y divide-gray-100" },
-        /*#__PURE__*/React.createElement("div", { className: "pb-2" }, /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-500 mb-1" }, "積載状況", i + 1, /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")), /*#__PURE__*/React.createElement("div", { className: "grid grid-cols-2 gap-1.5" }, /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return setCg(i, "status", "no"); }, className: "py-2 rounded text-sm ".concat(c.status === "no" ? "bg-gray-400 text-white" : "bg-gray-100 text-gray-500") }, "否"), /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return setCg(i, "status", "ok"); }, className: "py-2 rounded text-sm ".concat(c.status === "ok" ? "bg-red-400 text-white" : "bg-gray-100 text-gray-500") }, "良"))),
-        /*#__PURE__*/React.createElement("div", { className: "py-2" }, /*#__PURE__*/React.createElement("input", { value: c.type, onChange: function onChange(e) { return setCg(i, "type", e.target.value); }, placeholder: "積荷の種類", className: "w-full border border-gray-200 rounded px-2 py-1.5 text-sm" })),
-        /*#__PURE__*/React.createElement("div", { className: "pt-2 flex items-center gap-1.5" }, /*#__PURE__*/React.createElement("input", { value: c.weight, onChange: function onChange(e) { return setCg(i, "weight", e.target.value); }, placeholder: "\u7A4D\u8F09\u91CD\u91CF".concat(i + 1), className: "flex-1 min-w-0 border border-gray-200 rounded px-2 py-1.5 text-sm text-right" }), /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-500 flex-shrink-0" }, "t"), /*#__PURE__*/React.createElement("input", { value: c.ratio, onChange: function onChange(e) { return setCg(i, "ratio", e.target.value); }, placeholder: "\u7A4D\u8F09\u5272\u5408".concat(i + 1), className: "flex-1 min-w-0 border border-gray-200 rounded px-2 py-1.5 text-sm text-right" }), /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-500 flex-shrink-0" }, "%"))));
-  }));
+  var waypointsTabContent = /*#__PURE__*/React.createElement("div", { className: "space-y-3" },
+    /*#__PURE__*/React.createElement("div", { className: "bg-white rounded-xl border border-gray-200 overflow-hidden" },
+      /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 bg-gray-50 border-b border-gray-100" }, /*#__PURE__*/React.createElement("p", { className: "text-xs font-bold text-gray-700" }, "■主な経過地点"), /*#__PURE__*/React.createElement("p", { className: "text-[11px] text-gray-400 mt-0.5" }, "集荷・納品などで立ち寄った場所（あれば入力）")),
+      /*#__PURE__*/React.createElement("div", { className: "divide-y divide-gray-100" }, (form.waypoints || []).map(function (w, i) {
+        return /*#__PURE__*/React.createElement("div", { key: i, className: "px-3 py-2.5" },
+          /*#__PURE__*/React.createElement("div", { className: "flex items-center justify-between mb-1.5" },
+            /*#__PURE__*/React.createElement("p", { className: "text-xs font-bold text-gray-500" }, "経過地点", i + 1),
+            /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return removeWaypoint(i); }, className: "text-[11px] text-red-500 min-h-0 px-2 py-1" }, "\u524A\u9664")),
+          /*#__PURE__*/React.createElement("input", { value: w.loc, onChange: function onChange(e) { return setWaypoint(i, "loc", e.target.value); }, placeholder: "\u5834\u6240\uFF08\u4F8B\uFF1A\u5927\u962A\u5E02\u3000\u25CB\u25CB\u5009\u5EAB\uFF09", className: "w-full border border-gray-200 rounded px-2 py-1.5 text-sm mb-1.5" }),
+          /*#__PURE__*/React.createElement("div", { className: "flex flex-col gap-1" },
+            /*#__PURE__*/React.createElement("div", { className: "flex items-center gap-1" }, /*#__PURE__*/React.createElement("span", { className: "text-[11px] text-gray-400 flex-shrink-0 w-4" }, "\u7740"), /*#__PURE__*/React.createElement("input", { value: w.arrH, onChange: function onChange(e) { return setWaypoint(i, "arrH", e.target.value); }, placeholder: "10", maxLength: 2, className: "border border-gray-300 rounded px-1.5 py-1 text-sm text-center", style: { width: "48px" } }), /*#__PURE__*/React.createElement("span", { className: "text-gray-400" }, ":"), /*#__PURE__*/React.createElement("input", { value: w.arrM, onChange: function onChange(e) { return setWaypoint(i, "arrM", e.target.value); }, placeholder: "00", maxLength: 2, className: "border border-gray-300 rounded px-1.5 py-1 text-sm text-center", style: { width: "48px" } })),
+            /*#__PURE__*/React.createElement("div", { className: "flex items-center gap-1" }, /*#__PURE__*/React.createElement("span", { className: "text-[11px] text-gray-400 flex-shrink-0 w-4" }, "\u767A"), /*#__PURE__*/React.createElement("input", { value: w.depH, onChange: function onChange(e) { return setWaypoint(i, "depH", e.target.value); }, placeholder: "10", maxLength: 2, className: "border border-gray-300 rounded px-1.5 py-1 text-sm text-center", style: { width: "48px" } }), /*#__PURE__*/React.createElement("span", { className: "text-gray-400" }, ":"), /*#__PURE__*/React.createElement("input", { value: w.depM, onChange: function onChange(e) { return setWaypoint(i, "depM", e.target.value); }, placeholder: "30", maxLength: 2, className: "border border-gray-300 rounded px-1.5 py-1 text-sm text-center", style: { width: "48px" } }))));
+      })),
+      /*#__PURE__*/React.createElement("button", { onClick: addWaypoint, className: "w-full text-center text-sm font-bold text-teal-600 py-2.5 border-t border-gray-100" }, "\uFF0B \u7D4C\u904E\u5730\u70B9\u3092\u8FFD\u52A0")),
+    /*#__PURE__*/React.createElement("div", { className: "bg-white rounded-xl border border-gray-200 overflow-hidden" },
+      /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 bg-gray-50 border-b border-gray-100" }, /*#__PURE__*/React.createElement("p", { className: "text-xs font-bold text-gray-700" }, "■荷主都合の待機・荷役作業")),
+      /*#__PURE__*/React.createElement("div", { className: "px-3 py-2.5" },
+        /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-700 mb-1.5" }, "荷主都合による30分以上の待機、または荷役作業がありましたか", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")),
+        /*#__PURE__*/React.createElement("div", { className: "grid grid-cols-2 gap-1.5" },
+          /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return f("shipperWaitTaken", form.shipperWaitTaken === "no" ? null : "no"); }, className: "py-2 rounded text-sm ".concat(form.shipperWaitTaken === "no" ? "bg-gray-400 text-white" : "bg-gray-100 text-gray-500") }, "\u306A\u3057"),
+          /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return f("shipperWaitTaken", form.shipperWaitTaken === "yes" ? null : "yes"); }, className: "py-2 rounded text-sm ".concat(form.shipperWaitTaken === "yes" ? "bg-teal-500 text-white" : "bg-gray-100 text-gray-400") }, "\u3042\u308A")),
+        form.shipperWaitTaken === "yes" && /*#__PURE__*/React.createElement("div", { className: "mt-2 flex flex-col gap-1.5" },
+          /*#__PURE__*/React.createElement("input", { value: form.shipperWaitLoc, onChange: function onChange(e) { return f("shipperWaitLoc", e.target.value); }, placeholder: "\u5834\u6240", className: "w-full border border-gray-200 rounded px-2 py-1.5 text-sm" }),
+          /*#__PURE__*/React.createElement("input", { value: form.shipperWaitContent, onChange: function onChange(e) { return f("shipperWaitContent", e.target.value); }, placeholder: "\u5185\u5BB9\uFF08\u4F8B\uFF1A\u8377\u5378\u3057\u5F85\u3061\u3001\u30D5\u30A9\u30FC\u30AF\u30EA\u30D5\u30C8\u4F5C\u696D\uFF09", className: "w-full border border-gray-200 rounded px-2 py-1.5 text-sm" }),
+          /*#__PURE__*/React.createElement("div", { className: "flex flex-col gap-1" },
+            /*#__PURE__*/React.createElement("div", { className: "flex items-center gap-1" }, /*#__PURE__*/React.createElement("span", { className: "text-[11px] text-gray-400 flex-shrink-0 w-8" }, "\u958B\u59CB"), /*#__PURE__*/React.createElement("input", { value: form.shipperWaitStartH, onChange: function onChange(e) { return f("shipperWaitStartH", e.target.value); }, placeholder: "13", maxLength: 2, className: "border border-gray-300 rounded px-1.5 py-1 text-sm text-center", style: { width: "48px" } }), /*#__PURE__*/React.createElement("span", { className: "text-gray-400" }, ":"), /*#__PURE__*/React.createElement("input", { value: form.shipperWaitStartM, onChange: function onChange(e) { return f("shipperWaitStartM", e.target.value); }, placeholder: "00", maxLength: 2, className: "border border-gray-300 rounded px-1.5 py-1 text-sm text-center", style: { width: "48px" } })),
+            /*#__PURE__*/React.createElement("div", { className: "flex items-center gap-1" }, /*#__PURE__*/React.createElement("span", { className: "text-[11px] text-gray-400 flex-shrink-0 w-8" }, "\u7D42\u4E86"), /*#__PURE__*/React.createElement("input", { value: form.shipperWaitEndH, onChange: function onChange(e) { return f("shipperWaitEndH", e.target.value); }, placeholder: "13", maxLength: 2, className: "border border-gray-300 rounded px-1.5 py-1 text-sm text-center", style: { width: "48px" } }), /*#__PURE__*/React.createElement("span", { className: "text-gray-400" }, ":"), /*#__PURE__*/React.createElement("input", { value: form.shipperWaitEndM, onChange: function onChange(e) { return f("shipperWaitEndM", e.target.value); }, placeholder: "30", maxLength: 2, className: "border border-gray-300 rounded px-1.5 py-1 text-sm text-center", style: { width: "48px" } })))))));
 
-  var tabs = isPre ? [["record", "乗務記録"], ["precheck", "車両点検・アルコール"]] : [["record", "乗務記録"], ["cargo", "積荷"]];
+  var tabs = isPre ? [["record", "乗務記録"], ["precheck", "車両点検・アルコール"]] : [["record", "乗務記録"], ["waypoints", "経過地点・待機"]];
 
   return /*#__PURE__*/React.createElement("div", {
     className: "flex flex-col bg-gray-50 h-full"
@@ -5605,9 +5728,16 @@ function ShiftReportScreen(_ref100) {
     /*#__PURE__*/React.createElement("div", {
       className: "bg-white border-b border-gray-200 flex-shrink-0 flex items-center px-3 py-2"
     }, /*#__PURE__*/React.createElement("button", {
-      onClick: function onClick() { return onNav("home"); },
+      onClick: function onClick() {
+        // 【不具合修正・ユーザー要望】以前は、ここで単純にホームへ戻る
+        // だけだったため、入力途中の内容が、画面を離れた瞬間に、
+        // 何の確認も無く消えてしまっていた。一時保存してから戻ることで、
+        // 次にこの日報を開いたときに、続きから再開できるようにする。
+        LS.set(draftKey, form);
+        return onNav("home");
+      },
       className: "text-teal-600 text-sm font-bold px-1"
-    }, "‹ 戻る"), /*#__PURE__*/React.createElement("p", {
+    }, "‹ \u4E00\u6642\u4FDD\u5B58\u3057\u3066\u623B\u308B"), /*#__PURE__*/React.createElement("p", {
       className: "flex-1 text-center text-sm font-bold text-gray-700 pr-8"
     }, isPre ? "乗務前日報" : "乗務後日報")),
     /*#__PURE__*/React.createElement("div", {
@@ -5625,7 +5755,7 @@ function ShiftReportScreen(_ref100) {
     }, /*#__PURE__*/React.createElement("p", { className: "text-right text-xs text-red-500" }, "（*）：必須項目"),
       tab === "record" && recordTabContent,
       isPre && tab === "precheck" && precheckTabContent,
-      !isPre && tab === "cargo" && cargoTabContent,
+      !isPre && tab === "waypoints" && waypointsTabContent,
       /*#__PURE__*/React.createElement("div", { className: "h-4" })),
     /*#__PURE__*/React.createElement("div", {
       className: "px-3 py-3 bg-white border-t border-gray-200 flex-shrink-0"
@@ -8266,7 +8396,8 @@ function App() {
   }, "\u8AAD\u307F\u8FBC\u3093\u3067\u3044\u307E\u3059\u2026")) : render()), !hideNav && /*#__PURE__*/React.createElement("div", {
     className: "absolute bottom-0 left-0 right-0 bg-white border-t border-gray-200",
     style: {
-      height: NAV_H
+      height: NAV_H,
+      paddingBottom: "env(safe-area-inset-bottom)"
     }
   }, /*#__PURE__*/React.createElement("div", {
     className: "grid grid-cols-5 h-full"
