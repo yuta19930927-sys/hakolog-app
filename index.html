@@ -47,11 +47,9 @@
        禁止することで、中身のズレが起きても、必ずアプリ内部のスクロール
        領域（flex-1 overflow-y-auto）だけで完結するようにする。 */
     overflow: hidden;
-    height: 100%;
+    height: 100dvh;
     max-width: 100vw;
   }
-  html { height: -webkit-fill-available; }
-  body { height: 100vh; height: -webkit-fill-available; }
   #root { height: 100%; overflow: hidden; }
   input, textarea, select, button { font-family: inherit; }
   button { min-height: 44px; }
@@ -4083,10 +4081,10 @@ function HomeScreen(_ref12) {
     }, /*#__PURE__*/React.createElement("div", null,
       /*#__PURE__*/React.createElement("p", {
         className: "text-sm font-bold ".concat(preReportDone ? "text-teal-700" : "text-amber-700")
-      }, "\uD83D\uDE9B \u4E57\u52D9\u524D\u65E5\u5831\uFF08\u8ECA\u4E21\u70B9\u691C\u30FB\u30A2\u30EB\u30B3\u30FC\u30EB\u30C1\u30A7\u30C3\u30AF\u542B\u3080\uFF09"),
+      }, "\uD83D\uDE9B \u4E57\u52D9\u524D\u65E5\u5831\u30FB\u8ECA\u4E21\u70B9\u691C"),
       /*#__PURE__*/React.createElement("p", {
         className: "text-[11px] mt-0.5 ".concat(preReportDone ? "text-teal-500" : "text-amber-600")
-      }, preReportDone ? "\u2713 \u63D0\u51FA\u6E08\u307F" : "\u7A3C\u50CD\u958B\u59CB\u306B\u306F\u63D0\u51FA\u304C\u5FC5\u8981\u3067\u3059")
+      }, preReportDone ? "\u2713 \u63D0\u51FA\u6E08\u307F" : "\u70B9\u691C\u30FB\u30A2\u30EB\u30B3\u30FC\u30EB\u3082\u542B\u3081\u7A3C\u50CD\u958B\u59CB\u306B\u5FC5\u8981")
     ), /*#__PURE__*/React.createElement("span", {
       className: "text-lg ".concat(preReportDone ? "text-teal-500" : "text-amber-500")
     }, preReportDone ? "\u2713" : "\u203A")),
@@ -4755,8 +4753,7 @@ function SalesScreen(_ref16) {
     }, yenShort(value)));
   };
   return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(ScreenHeader, {
-    title: "実績",
-    onBack: onNav ? function () { return onNav("home"); } : undefined
+    title: "実績"
   }), /*#__PURE__*/React.createElement("div", {
     className: "flex-1 overflow-y-auto bg-gray-50 px-4 py-3 flex flex-col gap-3"
   }, /*#__PURE__*/React.createElement("div", {
@@ -4978,8 +4975,7 @@ function PayoutScreen(_ref20) {
    * 「あといくら稼げばプラスになるか」を示す。こちらの方が行動につながる。
    */
   return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(ScreenHeader, {
-    title: "報酬",
-    onBack: onNav ? function () { return onNav("home"); } : undefined
+    title: "報酬"
   }), /*#__PURE__*/React.createElement("div", {
     className: "flex-1 overflow-y-auto bg-gray-50 px-4 py-3 flex flex-col gap-3"
   }, /*#__PURE__*/React.createElement("div", {
@@ -5196,10 +5192,7 @@ function StatementScreen(_ref31) {
     w.document.write(html);
     w.document.close();
   };
-  return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(ScreenHeader, {
-    title: "\u5831\u916C\u660E\u7D30",
-    onBack: onNav ? function () { return onNav("more"); } : undefined
-  }), /*#__PURE__*/React.createElement("div", {
+  return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
     className: "flex-1 overflow-y-auto bg-gray-50 px-4 py-3 flex flex-col gap-3"
   }, /*#__PURE__*/React.createElement("div", {
     className: "flex items-center justify-between"
@@ -5496,7 +5489,7 @@ function ShiftReportScreen(_ref100) {
             key: w.key,
             onClick: function onClick() { return f("weather", w.key); },
             className: "flex flex-col items-center justify-center w-14 h-12 rounded-lg border-2 gap-0.5 ".concat(form.weather === w.key ? "border-teal-500 bg-teal-50 text-teal-600" : "border-gray-200 bg-gray-50 text-gray-400")
-          }, /*#__PURE__*/React.createElement("span", { className: "text-lg" }, w.emoji), /*#__PURE__*/React.createElement("span", { className: "text-[9px] font-medium" }, w.label));
+          }, /*#__PURE__*/React.createElement("span", { className: "text-lg" }, w.emoji), /*#__PURE__*/React.createElement("span", { className: "text-[10px] font-medium" }, w.label));
         }))))
     : /*#__PURE__*/React.createElement("div", {
         className: "bg-white rounded-xl border border-gray-200 overflow-hidden"
@@ -5509,7 +5502,7 @@ function ShiftReportScreen(_ref100) {
         /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 border-b border-gray-100" }, /*#__PURE__*/React.createElement("p", { className: "text-xs font-bold text-gray-600" }, "■走行距離"), /*#__PURE__*/React.createElement("div", { className: "flex items-center justify-between mt-1" }, /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-400" }, "出庫メーター", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")), /*#__PURE__*/React.createElement("div", { className: "flex items-center gap-1" }, /*#__PURE__*/React.createElement("input", { value: form.odometerOut, onChange: function onChange(e) { return f("odometerOut", e.target.value); }, className: "w-24 border border-gray-200 rounded px-2 py-1 text-sm text-right" }), /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-500" }, "km"))), /*#__PURE__*/React.createElement("div", { className: "flex items-center justify-between mt-1.5" }, /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-400" }, "帰庫メーター", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")), /*#__PURE__*/React.createElement("div", { className: "flex items-center gap-1" }, /*#__PURE__*/React.createElement("input", { value: form.odometerIn, onChange: function onChange(e) { return f("odometerIn", e.target.value); }, className: "w-24 border border-gray-200 rounded px-2 py-1 text-sm text-right" }), /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-500" }, "km")))),
         // 【機能追加・法令調査で発見】休憩・仮眠をとった場合の地点・日時は、
         // 業務記録（運転日報）の必須記録項目。
-        /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 border-b border-gray-100" }, /*#__PURE__*/React.createElement("p", { className: "text-xs font-bold text-gray-600" }, "\u2588\u4F11\u61A9\u30FB\u4EEE\u7720"), /*#__PURE__*/React.createElement("div", { className: "grid grid-cols-2 gap-1.5 mt-1" }, /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return f("restTaken", "no"); }, className: "py-2 rounded text-sm ".concat(form.restTaken === "no" ? "bg-gray-400 text-white" : "bg-gray-100 text-gray-500") }, "\u306A\u3057"), /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return f("restTaken", "yes"); }, className: "py-2 rounded text-sm ".concat(form.restTaken === "yes" ? "bg-teal-500 text-white" : "bg-gray-100 text-gray-400") }, "\u3042\u308A")), form.restTaken === "yes" && /*#__PURE__*/React.createElement("div", { className: "mt-2 flex flex-col gap-1.5" }, /*#__PURE__*/React.createElement("input", { value: form.restLoc, onChange: function onChange(e) { return f("restLoc", e.target.value); }, placeholder: "\u4F11\u61A9\u3057\u305F\u5834\u6240\uFF08\u4F8B\uFF1A\u25EF\u25EF\u30B5\u30FC\u30D3\u30B9\u30A8\u30EA\u30A2\uFF09", className: "w-full border border-gray-200 rounded px-2 py-1.5 text-sm" }), /*#__PURE__*/React.createElement("div", { className: "flex items-center gap-1" }, /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-400 flex-shrink-0" }, "\u6642\u523B"), /*#__PURE__*/React.createElement("input", { value: form.restH, onChange: function onChange(e) { return f("restH", e.target.value); }, placeholder: "12", maxLength: 2, className: "w-14 border border-gray-300 rounded px-2 py-1 text-sm text-center" }), /*#__PURE__*/React.createElement("span", { className: "text-gray-400" }, ":"), /*#__PURE__*/React.createElement("input", { value: form.restM, onChange: function onChange(e) { return f("restM", e.target.value); }, placeholder: "00", maxLength: 2, className: "w-14 border border-gray-300 rounded px-2 py-1 text-sm text-center" })))),
+        /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 border-b border-gray-100" }, /*#__PURE__*/React.createElement("p", { className: "text-xs font-bold text-gray-600" }, "\u2588\u4F11\u61A9\u30FB\u4EEE\u7720", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")), /*#__PURE__*/React.createElement("div", { className: "grid grid-cols-2 gap-1.5 mt-1" }, /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return f("restTaken", "no"); }, className: "py-2 rounded text-sm ".concat(form.restTaken === "no" ? "bg-gray-400 text-white" : "bg-gray-100 text-gray-500") }, "\u306A\u3057"), /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return f("restTaken", "yes"); }, className: "py-2 rounded text-sm ".concat(form.restTaken === "yes" ? "bg-teal-500 text-white" : "bg-gray-100 text-gray-400") }, "\u3042\u308A")), form.restTaken === "yes" && /*#__PURE__*/React.createElement("div", { className: "mt-2 flex flex-col gap-1.5" }, /*#__PURE__*/React.createElement("input", { value: form.restLoc, onChange: function onChange(e) { return f("restLoc", e.target.value); }, placeholder: "\u4F11\u61A9\u3057\u305F\u5834\u6240\uFF08\u4F8B\uFF1A\u25EF\u25EF\u30B5\u30FC\u30D3\u30B9\u30A8\u30EA\u30A2\uFF09", className: "w-full border border-gray-200 rounded px-2 py-1.5 text-sm" }), /*#__PURE__*/React.createElement("div", { className: "flex items-center gap-1" }, /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-400 flex-shrink-0" }, "\u6642\u523B"), /*#__PURE__*/React.createElement("input", { value: form.restH, onChange: function onChange(e) { return f("restH", e.target.value); }, placeholder: "12", maxLength: 2, className: "w-14 border border-gray-300 rounded px-2 py-1 text-sm text-center" }), /*#__PURE__*/React.createElement("span", { className: "text-gray-400" }, ":"), /*#__PURE__*/React.createElement("input", { value: form.restM, onChange: function onChange(e) { return f("restM", e.target.value); }, placeholder: "00", maxLength: 2, className: "w-14 border border-gray-300 rounded px-2 py-1 text-sm text-center" })))),
         /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 border-b border-gray-100" }, /*#__PURE__*/React.createElement("p", { className: "text-xs font-bold text-gray-600" }, "■道路、運行の状況"),
           yesNoButtons("highway", "高速道路の使用"),
           yesNoButtons("forklift", "フォークリフトの使用"),
@@ -5555,7 +5548,7 @@ function ShiftReportScreen(_ref100) {
         var idx = 0;
         return REQUIRED_VEHICLE_CHECKS.map(function (section) {
           return /*#__PURE__*/React.createElement("div", { key: section.section },
-            /*#__PURE__*/React.createElement("div", { className: "px-3 py-1.5 bg-gray-50/50" }, /*#__PURE__*/React.createElement("p", { className: "text-[11px] font-bold text-gray-500" }, section.section, /*#__PURE__*/React.createElement("span", { className: "text-red-500 ml-0.5" }, "*"))),
+            /*#__PURE__*/React.createElement("div", { className: "px-3 py-1.5", style: { backgroundColor: "rgba(249, 250, 251, 0.5)" } }, /*#__PURE__*/React.createElement("p", { className: "text-[11px] font-bold text-gray-500" }, section.section, /*#__PURE__*/React.createElement("span", { className: "text-red-500 ml-0.5" }, "*"))),
             /*#__PURE__*/React.createElement("div", { className: "px-3 divide-y divide-gray-100" }, section.items.map(function (label) {
               var i = idx++;
               return /*#__PURE__*/React.createElement(VehicleCheckItem, { key: label, label: label, value: (form.reqVals || {})[i], onChange: function onChange(v) { return setReqVal(i, v); } });
@@ -5571,7 +5564,7 @@ function ShiftReportScreen(_ref100) {
         var idx = 0;
         return OPTIONAL_VEHICLE_CHECKS.map(function (section) {
           return /*#__PURE__*/React.createElement("div", { key: section.section },
-            /*#__PURE__*/React.createElement("div", { className: "px-3 py-1.5 bg-gray-50/50" }, /*#__PURE__*/React.createElement("p", { className: "text-[11px] font-bold text-gray-500" }, section.section)),
+            /*#__PURE__*/React.createElement("div", { className: "px-3 py-1.5", style: { backgroundColor: "rgba(249, 250, 251, 0.5)" } }, /*#__PURE__*/React.createElement("p", { className: "text-[11px] font-bold text-gray-500" }, section.section)),
             /*#__PURE__*/React.createElement("div", { className: "px-3 divide-y divide-gray-100" }, section.items.map(function (label) {
               var i = idx++;
               return /*#__PURE__*/React.createElement(VehicleCheckItem, { key: label, label: label, value: (form.optVals || {})[i], onChange: function onChange(v) { return setOptVal(i, v); } });
@@ -5599,7 +5592,7 @@ function ShiftReportScreen(_ref100) {
       className: "bg-white rounded-xl border border-gray-200 overflow-hidden"
     }, /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 bg-gray-50 border-b border-gray-100" }, /*#__PURE__*/React.createElement("p", { className: "text-xs font-bold text-gray-700" }, "積荷", i + 1)),
       /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 divide-y divide-gray-100" },
-        /*#__PURE__*/React.createElement("div", { className: "pb-2" }, /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-500 mb-1" }, "積載状況", i + 1, /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")), /*#__PURE__*/React.createElement("div", { className: "grid grid-cols-2 gap-1.5" }, /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return setCg(i, "status", "no"); }, className: "py-2 rounded text-sm ".concat(c.status === "no" ? "bg-gray-400 text-white" : "bg-gray-100 text-gray-500") }, "否"), /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return setCg(i, "status", "ok"); }, className: "py-2 rounded text-sm ".concat(c.status === "ok" ? "bg-red-400 text-white" : "bg-gray-100 text-gray-400") }, "良"))),
+        /*#__PURE__*/React.createElement("div", { className: "pb-2" }, /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-500 mb-1" }, "積載状況", i + 1, /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")), /*#__PURE__*/React.createElement("div", { className: "grid grid-cols-2 gap-1.5" }, /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return setCg(i, "status", "no"); }, className: "py-2 rounded text-sm ".concat(c.status === "no" ? "bg-gray-400 text-white" : "bg-gray-100 text-gray-500") }, "否"), /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return setCg(i, "status", "ok"); }, className: "py-2 rounded text-sm ".concat(c.status === "ok" ? "bg-red-400 text-white" : "bg-gray-100 text-gray-500") }, "良"))),
         /*#__PURE__*/React.createElement("div", { className: "py-2" }, /*#__PURE__*/React.createElement("input", { value: c.type, onChange: function onChange(e) { return setCg(i, "type", e.target.value); }, placeholder: "積荷の種類", className: "w-full border border-gray-200 rounded px-2 py-1.5 text-sm" })),
         /*#__PURE__*/React.createElement("div", { className: "pt-2 flex items-center gap-1.5" }, /*#__PURE__*/React.createElement("input", { value: c.weight, onChange: function onChange(e) { return setCg(i, "weight", e.target.value); }, placeholder: "\u7A4D\u8F09\u91CD\u91CF".concat(i + 1), className: "flex-1 min-w-0 border border-gray-200 rounded px-2 py-1.5 text-sm text-right" }), /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-500 flex-shrink-0" }, "t"), /*#__PURE__*/React.createElement("input", { value: c.ratio, onChange: function onChange(e) { return setCg(i, "ratio", e.target.value); }, placeholder: "\u7A4D\u8F09\u5272\u5408".concat(i + 1), className: "flex-1 min-w-0 border border-gray-200 rounded px-2 py-1.5 text-sm text-right" }), /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-500 flex-shrink-0" }, "%"))));
   }));
@@ -5753,8 +5746,7 @@ function ScheduleScreen(_ref38) {
     return s + num(o.driverPayAmount);
   }, 0);
   return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(ScreenHeader, {
-    title: "予定",
-    onBack: onNav ? function () { return onNav("home"); } : undefined
+    title: "予定"
   }), /*#__PURE__*/React.createElement("div", {
     className: "flex-1 overflow-y-auto bg-gray-50 px-4 py-3 flex flex-col gap-3"
   }, /*#__PURE__*/React.createElement("div", {
@@ -5811,7 +5803,8 @@ function ScheduleScreen(_ref38) {
     }, worked && /*#__PURE__*/React.createElement("span", {
       className: "w-1.5 h-1.5 rounded-full ".concat(isSel ? "bg-white" : "bg-teal-500")
     }), hasJob && /*#__PURE__*/React.createElement("span", {
-      className: "w-1.5 h-1.5 rounded-full ".concat(isSel ? "bg-white/70" : "bg-blue-400")
+      className: "w-1.5 h-1.5 rounded-full ".concat(isSel ? "bg-white/70" : ""),
+      style: isSel ? undefined : { backgroundColor: "#60a5fa" }
     }), hasEv && /*#__PURE__*/React.createElement("span", {
       className: "w-1.5 h-1.5 rounded-full ".concat(isSel ? "bg-white/70" : "bg-orange-400")
     })));
@@ -5824,7 +5817,8 @@ function ScheduleScreen(_ref38) {
   }), "\u7A3C\u50CD"), /*#__PURE__*/React.createElement("span", {
     className: "flex items-center gap-1 text-[10px] text-gray-500"
   }, /*#__PURE__*/React.createElement("span", {
-    className: "w-1.5 h-1.5 rounded-full bg-blue-400"
+    className: "w-1.5 h-1.5 rounded-full",
+    style: { backgroundColor: "#60a5fa" }
   }), "\u4E88\u5B9A"), /*#__PURE__*/React.createElement("span", {
     className: "flex items-center gap-1 text-[10px] text-gray-500"
   }, /*#__PURE__*/React.createElement("span", {
@@ -5848,11 +5842,13 @@ function ScheduleScreen(_ref38) {
   (sel.jobs || []).map(function (o, i) {
     return /*#__PURE__*/React.createElement("div", {
       key: "j".concat(i),
-      className: "px-4 py-2.5 border-b border-gray-100 flex items-start justify-between gap-2 bg-blue-50/30"
+      className: "px-4 py-2.5 border-b border-gray-100 flex items-start justify-between gap-2",
+      style: { backgroundColor: "rgba(239, 246, 255, 0.5)" }
     }, /*#__PURE__*/React.createElement("div", {
       className: "flex items-start gap-2 min-w-0"
     }, /*#__PURE__*/React.createElement("span", {
-      className: "w-1.5 h-1.5 rounded-full bg-blue-400 mt-1.5 flex-shrink-0"
+      className: "w-1.5 h-1.5 rounded-full mt-1.5 flex-shrink-0",
+      style: { backgroundColor: "#60a5fa" }
     }), /*#__PURE__*/React.createElement("div", {
       className: "min-w-0"
     }, /*#__PURE__*/React.createElement("p", {
@@ -5936,10 +5932,7 @@ function NoticesScreen(_ref39) {
       label: "お知らせ"
     }
   };
-  return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(ScreenHeader, {
-    title: "お知らせ",
-    onBack: onNav ? function () { return onNav("more"); } : undefined
-  }), /*#__PURE__*/React.createElement("div", {
+  return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
     className: "flex-1 overflow-y-auto bg-gray-50 px-4 py-3 flex flex-col gap-3"
   }, notices.length === 0 && /*#__PURE__*/React.createElement("div", {
     className: "flex flex-col items-center justify-center py-20"
@@ -6025,10 +6018,7 @@ function ChatScreen(_ref40) {
     });
   };
   if (!chatReady) {
-    return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(ScreenHeader, {
-      title: "チャット",
-      onBack: onNav ? function () { return onNav("more"); } : undefined
-    }), /*#__PURE__*/React.createElement("div", {
+    return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
       className: "flex-1 flex flex-col items-center justify-center bg-gray-50 px-8 text-center gap-3"
     }, /*#__PURE__*/React.createElement("p", {
       className: "text-4xl"
@@ -6038,10 +6028,7 @@ function ChatScreen(_ref40) {
       className: "text-xs text-gray-400 leading-relaxed"
     }, "\u4F1A\u793E\u5074\u3067\u30C1\u30E3\u30C3\u30C8\u6A5F\u80FD\u306E\u521D\u671F\u8A2D\u5B9A\uFF08\u30C6\u30FC\u30D6\u30EB\u4F5C\u6210\uFF09\u304C\u5FC5\u8981\u3067\u3059\u3002", /*#__PURE__*/React.createElement("br", null), "\u7BA1\u7406\u8005\u306B\u3054\u9023\u7D61\u304F\u3060\u3055\u3044\u3002")));
   }
-  return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(ScreenHeader, {
-    title: "\u30C1\u30E3\u30C3\u30C8",
-    onBack: onNav ? function () { return onNav("more"); } : undefined
-  }), /*#__PURE__*/React.createElement("div", {
+  return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
     className: "flex-1 flex flex-col bg-gray-50 min-h-0"
   }, /*#__PURE__*/React.createElement("div", {
     className: "flex-1 overflow-y-auto px-4 py-3 flex flex-col gap-2"
@@ -6247,10 +6234,7 @@ function ProfileScreen(_ref41) {
   var mask = function mask(v) {
     return v ? "".concat("•".repeat(Math.max(0, String(v).length - 4))).concat(String(v).slice(-4)) : "";
   };
-  return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(ScreenHeader, {
-    title: "\u30D7\u30ED\u30D5\u30A3\u30FC\u30EB",
-    onBack: onNav ? function () { return onNav("more"); } : undefined
-  }), /*#__PURE__*/React.createElement("div", {
+  return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
     className: "flex-1 overflow-y-auto bg-gray-50 px-4 py-3 flex flex-col gap-3"
   }, saved && /*#__PURE__*/React.createElement("div", {
     className: "bg-teal-500 text-white text-sm font-bold rounded-xl px-4 py-2.5 text-center"
@@ -8003,7 +7987,7 @@ function App() {
     maxHeight: 900
   };
   var frameClass = isPhone ? "relative bg-gray-50 overflow-hidden flex flex-col" : "relative bg-gray-50 shadow-2xl rounded-3xl overflow-hidden flex flex-col";
-  var outerClass = isPhone ? "bg-gray-50 flex" : "min-h-screen bg-gray-300 flex items-center justify-center";
+  var outerClass = isPhone ? "bg-gray-50 flex h-full" : "min-h-screen bg-gray-300 flex items-center justify-center";
   if (!driver) {
     return /*#__PURE__*/React.createElement("div", {
       className: outerClass
