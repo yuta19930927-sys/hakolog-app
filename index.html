@@ -6257,9 +6257,9 @@ function ChatScreen(_ref40) {
       target: "_blank",
       rel: "noopener noreferrer",
       className: "flex items-center gap-2 ".concat(mine ? "text-white" : "text-teal-600", " font-bold text-sm underline")
-    }, "\uD83D\uDCC4 ", m.fileName || "ファイル"), m.body && /*#__PURE__*/React.createElement("p", {
+    }, "\uD83D\uDCC4 ", m.fileName || "ファイル"), (m.body || m.text) && /*#__PURE__*/React.createElement("p", {
       className: "text-sm whitespace-pre-wrap break-words"
-    }, m.body)), /*#__PURE__*/React.createElement("div", {
+    }, m.body || m.text)), /*#__PURE__*/React.createElement("div", {
       className: "flex items-center gap-1.5 px-1 ".concat(mine ? "flex-row-reverse" : "")
     }, /*#__PURE__*/React.createElement("span", {
       className: "text-[10px] text-gray-400"
