@@ -2409,59 +2409,43 @@ var api = {
    * 更新する。使い終わったコードは、もう一度使われないよう
    * 必ずクリアする（1回きりの使い捨てにする）。
    */
-  setPasswordWithCode: function setPasswordWithCode(driverId, code, newPassword) {
-    return _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee10b() {
-      var data, row, now, hashed, err;
-      return _regenerator().w(function (_context10b) {
-        while (1) switch (_context10b.n) {
-          case 0:
-            _context10b.n = 1;
-            return api.request('driver_auth', {
-              filter: "?driver_id=eq.".concat(driverId.toUpperCase().trim(), "&select=id,reset_code,reset_code_expires_at")
-            });
-          case 1:
-            data = _context10b.v;
-            row = (data || [])[0];
-            if (row) {
-              _context10b.n = 2;
-              break;
-            }
-            err = new Error("ドライバーIDが見つかりません。会社にご確認ください。");
-            err.code = "NOT_FOUND";
-            throw err;
-          case 2:
-            if (!(!row.reset_code || row.reset_code !== code.trim())) {
-              _context10b.n = 3;
-              break;
-            }
-            err = new Error("コードが正しくありません。会社に発行してもらったコードをご確認ください。");
-            err.code = "CODE_MISMATCH";
-            throw err;
-          case 3:
-            now = new Date();
-            if (!(!row.reset_code_expires_at || new Date(row.reset_code_expires_at) < now)) {
-              _context10b.n = 4;
-              break;
-            }
-            err = new Error("コードの有効期限が切れています。会社に新しいコードを発行してもらってください。");
-            err.code = "CODE_EXPIRED";
-            throw err;
-          case 4:
-            _context10b.n = 5;
-            return hashPassword(driverId, newPassword);
-          case 5:
-            hashed = _context10b.v;
-            _context10b.n = 6;
-            return api.request('driver_auth', {
-              method: 'PATCH',
-              filter: "?id=eq.".concat(row.id),
-              body: { password_hash: hashed, reset_code: null, reset_code_expires_at: null }
-            });
-          case 6:
-            return _context10b.a(2, true);
-        }
-      }, _callee10b);
-    }))();
+  /**
+   * 【機能追加】事務員が発行した一時コードを使って、新しいパスワードを
+   * 設定する（初回設定・パスワードを忘れた場合の再設定の両方に使う）。
+   * 【重要・セキュリティ修正】以前は、driver_auth テーブルの
+   * password_hash を、直接、書き換えるだけだった。Supabase Auth移行後、
+   * これでは、実際のログイン用パスワードが、まったく変わらない、
+   * という、重大な不整合が起きてしまう。専用のSQL関数
+   * （reset_driver_password_with_code）を呼び出し、コードの確認から、
+   * 実際のパスワード更新まで、すべて、サーバー側で、安全に行う。
+   */
+  setPasswordWithCode: async function setPasswordWithCode(driverId, code, newPassword) {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/reset_driver_password_with_code`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': SUPABASE_KEY,
+        'Authorization': `Bearer ${SUPABASE_KEY}`,
+      },
+      body: JSON.stringify({
+        p_driver_id: driverId.toUpperCase().trim(),
+        p_code: code.trim(),
+        p_new_password: newPassword,
+      }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      const message = body?.message || "パスワードの変更に失敗しました。時間をおいて再度お試しください。";
+      const err = new Error(message);
+      // SQL側の raise exception の errcode を、そのまま、引き継ぐ
+      // （呼び出し元の画面が、エラーの種類ごとに、案内文を、
+      // 出し分けているため）。
+      if (message.includes("見つかりません")) err.code = "NOT_FOUND";
+      else if (message.includes("正しくありません")) err.code = "CODE_MISMATCH";
+      else if (message.includes("期限が切れています")) err.code = "CODE_EXPIRED";
+      throw err;
+    }
+    return true;
   }
 };
 
@@ -6457,7 +6441,7 @@ function ProfileScreen(_ref41) {
   }, driver === null || driver === void 0 ? void 0 : driver.driverId), /*#__PURE__*/React.createElement("span", {
     className: "inline-block mt-2 text-[11px] font-bold bg-teal-50 text-teal-700 px-3 py-1 rounded-full"
   }, (profile === null || profile === void 0 ? void 0 : profile.contractType) || "業務委託")), /*#__PURE__*/React.createElement(Card, {
-    className: "overflow-hidden"
+    className: "overflow-hidden flex-shrink-0"
   }, /*#__PURE__*/React.createElement("div", {
     className: "px-4 py-2 bg-gray-50 border-b border-gray-100 flex items-center justify-between"
   }, /*#__PURE__*/React.createElement("p", {
@@ -6569,7 +6553,7 @@ function ProfileScreen(_ref41) {
     label: "\u7DCA\u6025\u9023\u7D61\u5148",
     value: profile !== null && profile !== void 0 && profile.emergencyName ? "".concat(profile.emergencyName, "\uFF08").concat(profile.emergencyRelation || "—", "\uFF09").concat(profile.emergencyPhone || "") : ""
   }))), /*#__PURE__*/React.createElement(Card, {
-    className: "overflow-hidden"
+    className: "overflow-hidden flex-shrink-0"
   }, /*#__PURE__*/React.createElement("div", {
     className: "px-4 py-2 bg-gray-50 border-b border-gray-100"
   }, /*#__PURE__*/React.createElement("p", {
@@ -6595,7 +6579,7 @@ function ProfileScreen(_ref41) {
     value: profile !== null && profile !== void 0 && profile.insuranceMonthly ? "".concat(yen(profile.insuranceMonthly), "\uFF0F\u6708") : "",
     locked: true
   })), /*#__PURE__*/React.createElement(Card, {
-    className: "overflow-hidden"
+    className: "overflow-hidden flex-shrink-0"
   }, /*#__PURE__*/React.createElement("div", {
     className: "px-4 py-2 bg-gray-50 border-b border-gray-100"
   }, /*#__PURE__*/React.createElement("p", {
@@ -6623,7 +6607,7 @@ function ProfileScreen(_ref41) {
   }, "\u26A0 \u53E3\u5EA7\u304C\u672A\u767B\u9332\u3067\u3059"), /*#__PURE__*/React.createElement("p", {
     className: "text-[11px] text-amber-600 mt-1"
   }, "\u767B\u9332\u3055\u308C\u306A\u3044\u3068\u5831\u916C\u304C\u632F\u308A\u8FBC\u3081\u307E\u305B\u3093\u3002\u4F1A\u793E\u306B\u3054\u9023\u7D61\u304F\u3060\u3055\u3044\u3002"))), /*#__PURE__*/React.createElement(Card, {
-    className: "overflow-hidden"
+    className: "overflow-hidden flex-shrink-0"
   }, /*#__PURE__*/React.createElement("div", {
     className: "px-4 py-2 bg-gray-50 border-b border-gray-100"
   }, /*#__PURE__*/React.createElement("p", {
@@ -6642,7 +6626,7 @@ function ProfileScreen(_ref41) {
     label: "\u81EA\u8CE0\u8CAC\u671F\u9650",
     value: profile === null || profile === void 0 ? void 0 : profile.liabilityInsuranceExpiry
   })), /*#__PURE__*/React.createElement(Card, {
-    className: "overflow-hidden"
+    className: "overflow-hidden flex-shrink-0"
   }, /*#__PURE__*/React.createElement("div", {
     className: "px-4 py-2 bg-gray-50 border-b border-gray-100"
   }, /*#__PURE__*/React.createElement("p", {
