@@ -1501,6 +1501,7 @@ var SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSI
 var driverSession = {
   accessToken: null,
   refreshToken: null,
+  userId: null,
 };
 
 /* ══════════════ ローカルDB（LOCAL_MODE のときだけ使う） ══════════════ */
@@ -2366,11 +2367,12 @@ var api = {
     const authData = await authRes.json();
     driverSession.accessToken = authData.access_token;
     driverSession.refreshToken = authData.refresh_token;
+    driverSession.userId = authData.user?.id || null;
     LS.set(K_SESSION, { refreshToken: authData.refresh_token });
 
     // ③ ログインに成功したら、本人のプロフィール・ドライバー情報を取得する。
     const profileRows = await api.request('profiles', {
-      filter: `?id=eq.${authData.user.id}&select=id,tenant_id,driver_id`,
+      filter: `?id=eq.${authData.user.id}&select=id,tenant_id,driver_id,admin_password_set_at`,
     });
     const profile = (profileRows || [])[0];
     if (!profile) {
@@ -2395,7 +2397,19 @@ var api = {
       throw err;
     }
 
+    // 【機能追加】管理者が、初期パスワードを設定してから、30日を
+    // 過ぎても、ドライバー自身が、パスワードを変更していない場合、
+    // 「パスワードの変更が必要」として、ホーム画面より前に、
+    // 変更を求める（口頭でのお願いだけに頼らない、確実な仕組み）。
+    var mustChangePassword = false;
+    if (profile.admin_password_set_at) {
+      var setAt = new Date(profile.admin_password_set_at);
+      var daysSince = (Date.now() - setAt.getTime()) / (1000 * 60 * 60 * 24);
+      if (daysSince >= 30) mustChangePassword = true;
+    }
+
     return {
+      mustChangePassword: mustChangePassword,
       driverId: profile.driver_id,
       tenantId: profile.tenant_id,
       driverName: p.name || profile.driver_id,
@@ -2444,6 +2458,49 @@ var api = {
       else if (message.includes("正しくありません")) err.code = "CODE_MISMATCH";
       else if (message.includes("期限が切れています")) err.code = "CODE_EXPIRED";
       throw err;
+    }
+    return true;
+  },
+  /**
+   * 【機能追加】ログイン中の、ドライバー自身が、自分の意思で、
+   * パスワードを、変更する。既に、有効な、ログインセッション
+   * （アクセストークン）を、持っているため、管理者権限は、
+   * 不要（Supabase Authの、標準の、本人による、更新の仕組み）。
+   * 管理者が設定した、初期パスワードから、自分だけが知っている、
+   * パスワードへ、切り替えてもらうための、機能。
+   */
+  changeOwnPassword: async function changeOwnPassword(newPassword) {
+    if (!driverSession.accessToken) {
+      throw new Error("ログインし直してから、もう一度お試しください。");
+    }
+    const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': SUPABASE_KEY,
+        'Authorization': `Bearer ${driverSession.accessToken}`,
+      },
+      body: JSON.stringify({ password: newPassword }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body?.msg || body?.message || "パスワードの変更に失敗しました。");
+    }
+    // 【重要】自分の意思で、パスワードを変更したので、「管理者が決めた、
+    // 初期パスワードのまま」という、印（admin_password_set_at）を、
+    // 消しておく。これにより、次回以降、変更を促す・強制する画面が、
+    // 表示されなくなる。
+    if (driverSession.userId) {
+      try {
+        await api.request('profiles', {
+          method: 'PATCH',
+          filter: `?id=eq.${driverSession.userId}`,
+          body: { admin_password_set_at: null },
+        });
+      } catch (_unused9) {
+        // 印を消す処理が失敗しても、パスワード自体の変更は、既に
+        // 成功しているため、致命的な失敗としては扱わない。
+      }
     }
     return true;
   }
@@ -4000,6 +4057,65 @@ function ResetPasswordScreen(_ref0b) {
     disabled: loading,
     className: "w-full rounded-xl py-4 font-bold text-base text-white ".concat(loading ? "bg-teal-300" : "bg-teal-500")
   }, loading ? "\u8A2D\u5B9A\u4E2D..." : "\u30D1\u30B9\u30EF\u30FC\u30C9\u3092\u8A2D\u5B9A")));
+}
+
+/**
+ * 【機能追加】管理者が設定した、初期パスワードのまま、30日を過ぎた、
+ * ドライバーに、表示する、パスワード変更、必須の画面。
+ * 「戻る」ボタンを、意図的に、設けていない（スキップして、そのまま、
+ * 古いパスワードを、使い続けられては、意味が無いため）。
+ */
+function ForcePasswordChangeScreen(_ref12f) {
+  var onDone = _ref12f.onDone;
+  var _s1 = useState(""), _s1b = _slicedToArray(_s1, 2), pw1 = _s1b[0], setPw1 = _s1b[1];
+  var _s2 = useState(""), _s2b = _slicedToArray(_s2, 2), pw2 = _s2b[0], setPw2 = _s2b[1];
+  var _s3 = useState(false), _s3b = _slicedToArray(_s3, 2), loading = _s3b[0], setLoading = _s3b[1];
+  var _s4 = useState(""), _s4b = _slicedToArray(_s4, 2), error = _s4b[0], setError = _s4b[1];
+
+  var submit = function submit() {
+    if (loading) return;
+    setError("");
+    if (pw1.length < 4) { setError("パスワードは4文字以上にしてください"); return; }
+    if (pw1 !== pw2) { setError("新しいパスワード（確認）が一致しません"); return; }
+    setLoading(true);
+    api.changeOwnPassword(pw1).then(function () {
+      setLoading(false);
+      onDone();
+    }).catch(function (e) {
+      setLoading(false);
+      setError((e && e.message) || "設定に失敗しました");
+    });
+  };
+
+  return /*#__PURE__*/React.createElement("div", {
+    className: "flex-1 flex flex-col bg-gray-50"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "bg-white border-b border-gray-200 px-4 py-3 flex-shrink-0"
+  }, /*#__PURE__*/React.createElement("p", {
+    className: "text-base font-black text-gray-900"
+  }, "\u30D1\u30B9\u30EF\u30FC\u30C9\u306E\u5909\u66F4\u304C\u5FC5\u8981\u3067\u3059")),
+  /*#__PURE__*/React.createElement("div", {
+    className: "flex-1 overflow-y-auto px-6 py-5 flex flex-col gap-3"
+  }, /*#__PURE__*/React.createElement("p", {
+    className: "text-xs text-gray-500 leading-relaxed"
+  }, "\u4F1A\u793E\u304C\u767A\u884C\u3057\u305F\u521D\u671F\u30D1\u30B9\u30EF\u30FC\u30C9\u3092\u3001\u9577\u671F\u9593\u3001\u305D\u306E\u307E\u307E\u4F7F\u7528\u3057\u3066\u3044\u308B\u305F\u3081\u3001\u5B89\u5168\u306E\u305F\u3081\u3001\u3054\u81EA\u8EAB\u306E\u30D1\u30B9\u30EF\u30FC\u30C9\u306B\u5909\u66F4\u3057\u3066\u304F\u3060\u3055\u3044\u3002"),
+  /*#__PURE__*/React.createElement("div", null,
+    /*#__PURE__*/React.createElement("label", { className: "text-xs font-bold text-gray-500 mb-1 block" }, "\u65B0\u3057\u3044\u30D1\u30B9\u30EF\u30FC\u30C9"),
+    /*#__PURE__*/React.createElement("input", {
+      type: "password", value: pw1, onChange: function onChange(e) { return setPw1(e.target.value); },
+      className: "w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm"
+    })),
+  /*#__PURE__*/React.createElement("div", null,
+    /*#__PURE__*/React.createElement("label", { className: "text-xs font-bold text-gray-500 mb-1 block" }, "\u65B0\u3057\u3044\u30D1\u30B9\u30EF\u30FC\u30C9\uFF08\u78BA\u8A8D\uFF09"),
+    /*#__PURE__*/React.createElement("input", {
+      type: "password", value: pw2, onChange: function onChange(e) { return setPw2(e.target.value); },
+      className: "w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm"
+    })),
+  error && /*#__PURE__*/React.createElement("p", { className: "text-xs text-red-500" }, error),
+  /*#__PURE__*/React.createElement("button", {
+    onClick: submit, disabled: loading,
+    className: "w-full rounded-xl py-4 font-bold text-base text-white ".concat(loading ? "bg-teal-300" : "bg-teal-500")
+  }, loading ? "\u8A2D\u5B9A\u4E2D..." : "\u30D1\u30B9\u30EF\u30FC\u30C9\u3092\u5909\u66F4\u3059\u308B")));
 }
 
 function HomeScreen(_ref12) {
@@ -6694,6 +6810,14 @@ function App() {
         driverSession.accessToken = data.access_token;
         driverSession.refreshToken = data.refresh_token;
         LS.set(K_SESSION, { refreshToken: data.refresh_token });
+        // 【重要】リフレッシュトークンの応答には、通常、ユーザー情報が
+        // 含まれないため、別途、確実に取得しておく。
+        // changeOwnPassword 等、本人のIDを必要とする、後続の処理のため。
+        return fetch(`${SUPABASE_URL}/auth/v1/user`, {
+          headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${data.access_token}` },
+        }).then(function (r) { return r.ok ? r.json() : null; }).then(function (u) {
+          if (u?.id) driverSession.userId = u.id;
+        }).catch(function () {});
       }
     }).catch(function (e) {
       console.warn("セッションの復元に失敗しました:", e);
@@ -8156,6 +8280,12 @@ function App() {
   var handleLogin = function handleLogin(d) {
     setDriver(d);
     LS.set(K_DRIVER, d);
+    // 【機能追加】管理者が設定した、初期パスワードのまま、30日を
+    // 過ぎている場合、通常のホーム画面より前に、パスワードの変更を、
+    // 求める、専用の画面に、進む。
+    if (d && d.mustChangePassword) {
+      setScreen("forcePasswordChange");
+    }
   };
   var handleLogout = function handleLogout() {
     // 【重要・セキュリティ修正】ログアウト時は、Supabase Authの、
@@ -8265,6 +8395,16 @@ function App() {
     }) : /*#__PURE__*/React.createElement(LoginScreen, {
       onLogin: handleLogin,
       onGoToReset: function onGoToReset() { return setPreLoginScreen("reset"); }
+    })));
+  }
+  if (screen === "forcePasswordChange") {
+    return /*#__PURE__*/React.createElement("div", {
+      className: outerClass
+    }, /*#__PURE__*/React.createElement("div", {
+      className: frameClass,
+      style: PHONE
+    }, /*#__PURE__*/React.createElement(ForcePasswordChangeScreen, {
+      onDone: function onDone() { return setScreen("home"); }
     })));
   }
   var NAV = [{
