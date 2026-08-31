@@ -5518,15 +5518,14 @@ function ShiftReportScreen(_ref100) {
   var _useState_sr7 = useState("record"),
     _useState_sr8 = _slicedToArray(_useState_sr7, 2),
     tab = _useState_sr8[0], setTab = _useState_sr8[1];
-  // 【機能追加・ユーザー要望】任意点検は、必須点検より項目数が多く、
-  // 画面が長くなりがちなため、トグルで開閉できるようにし、既定では
-  // 隠しておく。ただし、既に「修理対応」（異常あり）の回答が
-  // 記録されている場合や、「前回の運行において異状がないこと」が
-  // まだ未回答の場合（この項目自体は必須のまま、任意点検のセクション
-  // に移動したため）は、見落とさないよう、最初から開いておく。
-  var _useState_sr9 = useState(function () {
-      return Object.values((form.optVals || {})).some(function (v) { return v === "repair"; }) || !form.prevAbnormal;
-    }),
+  // 【機能修正・ユーザー要望】以前は、「修理対応（異常あり）の回答が、
+  // 既に記録されている場合」や「前回の運行の異状確認が、未回答の場合」に、
+  // 見落とし防止のため、最初から展開していた。しかし、「前回の運行の
+  // 異状確認」を、必須項目から外したことに伴い、また、ユーザーからの、
+  // 明確な要望（最初は閉じた状態にしてほしい）により、常に、閉じた
+  // 状態から始まるようにする。ドライバーは、矢印を押せば、いつでも、
+  // 展開できる。
+  var _useState_sr9 = useState(false),
     _useState_sr10 = _slicedToArray(_useState_sr9, 2),
     showOptionalCheck = _useState_sr10[0], setShowOptionalCheck = _useState_sr10[1];
 
@@ -5569,7 +5568,9 @@ function ShiftReportScreen(_ref100) {
       allReqLabels.forEach(function (label, i) {
         if (!(form.reqVals || {})[i]) missingPrecheck.push(label);
       });
-      if (!form.prevAbnormal) missingPrecheck.push("前回運行の異状確認");
+      // 【機能修正・ユーザー要望】「前回の運行において異状がないこと」は、
+      // 必須項目から、除外する（以前は、未回答だと、提出できない、
+      // 必須項目だったが、任意の確認項目に変更する）。
       // 【機能追加・点呼記録簿に基づく再設計】点呼執行者・点呼方法も、
       // 点呼記録簿の必須記録項目。
       if (!form.callExecutor) missingPrecheck.push("点呼執行者");
@@ -5828,7 +5829,7 @@ function ShiftReportScreen(_ref100) {
         });
       })(),
       showOptionalCheck && /*#__PURE__*/React.createElement("div", { className: "px-3 py-2.5 border-t border-gray-100" },
-        /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-700 mb-1.5" }, "前回の運行において異状がないこと", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")),
+        /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-700 mb-1.5" }, "前回の運行において異状がないこと"),
         /*#__PURE__*/React.createElement("div", { className: "grid grid-cols-2 gap-1.5 mb-2" },
           /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return f("prevAbnormal", form.prevAbnormal === "repair" ? null : "repair"); }, className: "py-2 rounded-lg text-sm font-medium ".concat(form.prevAbnormal === "repair" ? "bg-red-500 text-white" : "bg-gray-100 text-gray-500") }, "修理対応"),
           /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return f("prevAbnormal", form.prevAbnormal === "ok" ? null : "ok"); }, className: "py-2 rounded-lg text-sm font-medium ".concat(form.prevAbnormal === "ok" ? "bg-teal-500 text-white" : "bg-gray-100 text-gray-400") }, "良")),
