@@ -2680,12 +2680,19 @@ var isMonthClosed = function isMonthClosed(companyInfo, month) {
  * 1件の配送実績から、売上とドライバー支払額を計算する。
  * ハコマネ側 calcAmounts と同一ロジック。片方だけ変更してはいけない。
  */
-var calcRecordAmounts = function calcRecordAmounts(form, jobType, dekaRates) {
+var calcRecordAmounts = function calcRecordAmounts(form, jobType, dekaRates, route) {
   var pattern = (jobType === null || jobType === void 0 ? void 0 : jobType.calcPattern) || "count";
-  // 単価が未入力(空)のときだけ案件のデフォルト単価を使う。
-  // 「0円」は意図的な入力なので、0のまま尊重する（|| を使うと 0 が消えてしまう）。
-  var up = form.unitPrice !== "" && form.unitPrice != null ? num(form.unitPrice) : num(jobType === null || jobType === void 0 ? void 0 : jobType.unitPrice);
-  var dup = form.driverUnitPrice !== "" && form.driverUnitPrice != null ? num(form.driverUnitPrice) : num(jobType === null || jobType === void 0 ? void 0 : jobType.driverUnitPrice);
+  // 【重要・不具合修正】単価は「①フォームで直接上書きされた値 → ②担当ルートの
+  // 個別単価 → ③案件マスタのデフォルト単価」の優先順で決める。以前は
+  // ②が抜けていて、案件マスタの単価が0円のテナントでは、ドライバー
+  // ごとに個別設定した単価（運転者台帳の「担当ルート」）が入力画面の
+  // その場計算に一切反映されず、実際には正しい金額で保存されるのに、
+  // 画面上は常に「あなたの報酬 ¥0」と表示されてしまっていた
+  // （実際に発見・再現した）。
+  var routeUnitPrice = route && route.unitPrice !== "" && route.unitPrice != null ? num(route.unitPrice) : null;
+  var routeDriverUnitPrice = route && route.driverUnitPrice !== "" && route.driverUnitPrice != null ? num(route.driverUnitPrice) : null;
+  var up = form.unitPrice !== "" && form.unitPrice != null ? num(form.unitPrice) : routeUnitPrice != null ? routeUnitPrice : num(jobType === null || jobType === void 0 ? void 0 : jobType.unitPrice);
+  var dup = form.driverUnitPrice !== "" && form.driverUnitPrice != null ? num(form.driverUnitPrice) : routeDriverUnitPrice != null ? routeDriverUnitPrice : num(jobType === null || jobType === void 0 ? void 0 : jobType.driverUnitPrice);
   var sales = 0,
     driver = 0;
   // 【機能追加】デカ宅は「個数×単価」ではなく、荷物のサイズごとに
@@ -4405,7 +4412,7 @@ function EntrySheet(_ref14) {
     return r.jobTypeId === form.jobTypeId;
   });
   var dekaRates = isDeka ? (matchedRoute && Array.isArray(matchedRoute.dekaRates) ? matchedRoute.dekaRates : Array.isArray(jt === null || jt === void 0 ? void 0 : jt.dekaRates) ? jt.dekaRates : []) : null;
-  var amounts = calcRecordAmounts(form, jt, dekaRates);
+  var amounts = calcRecordAmounts(form, jt, dekaRates, matchedRoute);
 
   /**
    * ===== 二重登録の事前警告 =====
@@ -4421,9 +4428,14 @@ function EntrySheet(_ref14) {
     return r && !r.deleted && r.id !== form.id && r.date === form.date && r.customerId === form.customerId && r.jobTypeId === form.jobTypeId;
   }).length;
 
-  // 単価が未入力なら案件の既定単価を表示する（何円で計算されているか分からないと不安なため）
-  var effUnit = form.unitPrice !== "" ? num(form.unitPrice) : num(jt === null || jt === void 0 ? void 0 : jt.unitPrice);
-  var effDriverUnit = form.driverUnitPrice !== "" ? num(form.driverUnitPrice) : num(jt === null || jt === void 0 ? void 0 : jt.driverUnitPrice);
+  // 単価が未入力なら案件の既定単価を表示する（何円で計算されているか分からないと不安なため）。
+  // 【重要・不具合修正】calcRecordAmounts と同じ優先順（担当ルートの個別単価 → 案件マスタ）に揃える。
+  // ここだけ担当ルートを見ていなかったため、実際の計算（¥22,500等）は正しいのに、
+  // 内訳表示だけ「× ¥0」のままになり、金額が合っていないように見えてしまっていた。
+  var routeUnitPriceForDisplay = matchedRoute && matchedRoute.unitPrice !== "" && matchedRoute.unitPrice != null ? num(matchedRoute.unitPrice) : null;
+  var routeDriverUnitPriceForDisplay = matchedRoute && matchedRoute.driverUnitPrice !== "" && matchedRoute.driverUnitPrice != null ? num(matchedRoute.driverUnitPrice) : null;
+  var effUnit = form.unitPrice !== "" ? num(form.unitPrice) : routeUnitPriceForDisplay != null ? routeUnitPriceForDisplay : num(jt === null || jt === void 0 ? void 0 : jt.unitPrice);
+  var effDriverUnit = form.driverUnitPrice !== "" ? num(form.driverUnitPrice) : routeDriverUnitPriceForDisplay != null ? routeDriverUnitPriceForDisplay : num(jt === null || jt === void 0 ? void 0 : jt.driverUnitPrice);
   var canSave = form.date && form.jobTypeId && !saving;
 
   // この実績を編集できるか。承認済み・申請中は触れない。
@@ -7568,7 +7580,7 @@ function App() {
               return r.jobTypeId === sanitized.jobTypeId;
             });
             dekaRatesForSave = (jt === null || jt === void 0 ? void 0 : jt.name) === "\u30C7\u30AB\u5B85" ? (matchedRouteForSave && Array.isArray(matchedRouteForSave.dekaRates) ? matchedRouteForSave.dekaRates : Array.isArray(jt === null || jt === void 0 ? void 0 : jt.dekaRates) ? jt.dekaRates : []) : null;
-            amounts = calcRecordAmounts(sanitized, jt, dekaRatesForSave);
+            amounts = calcRecordAmounts(sanitized, jt, dekaRatesForSave, matchedRouteForSave);
             status = mode === "submit" ? APPROVAL.SUBMITTED : APPROVAL.DRAFT;
             payload = _objectSpread(_objectSpread(_objectSpread({}, sanitized), amounts), {}, {
               id: form.id || "DR-".concat(Date.now(), "-").concat(Math.random().toString(36).slice(2, 7)),
@@ -7856,7 +7868,7 @@ function App() {
                 return rt.jobTypeId === r.jobTypeId;
               });
               var dekaRatesForResubmit = (jtForRecord === null || jtForRecord === void 0 ? void 0 : jtForRecord.name) === "\u30C7\u30AB\u5B85" ? (matchedRouteForResubmit && Array.isArray(matchedRouteForResubmit.dekaRates) ? matchedRouteForResubmit.dekaRates : Array.isArray(jtForRecord === null || jtForRecord === void 0 ? void 0 : jtForRecord.dekaRates) ? jtForRecord.dekaRates : []) : null;
-              var amounts = calcRecordAmounts(sanitized, jtForRecord, dekaRatesForResubmit);
+              var amounts = calcRecordAmounts(sanitized, jtForRecord, dekaRatesForResubmit, matchedRouteForResubmit);
               return _objectSpread(_objectSpread(_objectSpread({}, sanitized), amounts), {}, {
                 approvalStatus: APPROVAL.SUBMITTED,
                 submittedAt: now,
