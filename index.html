@@ -2273,10 +2273,29 @@ var api = {
           case 7:
             return _context0.a(2, existing[0].id);
           case 8:
+            // 【重要・不具合修正／根本原因】以前はここで、単純な
+            // 「無ければ作成する（POST）」を行っていた。しかし、
+            // 「既存行があるか確認する（4〜5の検索）」から
+            // 「無ければ作成する（この8の直前まで）」までの間には、
+            // 必ず一瞬の間（ネットワーク往復の時間）が空く。
+            // その一瞬の間に、通信の遅延・再試行・オフライン復帰時の
+            // 再送信などが重なり、「まだ無い」と判定する処理が、
+            // ほぼ同時に2回動いてしまうと、同じ業務ID（payload.id）を
+            // 持つ行が、2件、別々に作成されてしまう（実際に本番データで
+            // 発見・確認した）。
+            // これを確実に防ぐには、アプリ側のチェックに頼るのではなく、
+            // データベース自身に「同じテナント・同じ業務IDの行は、
+            // 絶対に2件存在できない」という制約（一意制約）を持たせ、
+            // その制約に違反しそうになったら、新規作成ではなく、
+            // 自動的に「既存の1件を更新する」動きに切り替えてもらう
+            // （on_conflict + resolution=merge-duplicates）。
+            // これにより、たとえ同時に2回リクエストが飛んでも、
+            // データベース側で必ず1件にまとまる。
             _context0.n = 9;
             return api.request(table, {
               method: 'POST',
-              prefer: 'return=representation',
+              filter: "?on_conflict=tenant_id,business_id",
+              prefer: 'return=representation,resolution=merge-duplicates',
               body: {
                 tenant_id: tenantId,
                 payload: payload
@@ -2904,7 +2923,11 @@ var Sheet = function Sheet(_ref4) {
     onClick: onClose,
     className: "text-gray-400 text-xl px-2 min-h-0"
   }, "\u2715")), /*#__PURE__*/React.createElement("div", {
-    className: "overflow-y-auto px-5 py-4"
+    // 【重要・不具合修正】横方向のはみ出しを隠す指定が無かったため、
+    // 日付入力欄など、ごく僅かに横幅が広い部品が1つでもあると、
+    // ポップアップ全体が左右にドラッグできてしまい、他の項目が
+    // 画面の外に隠れて「消えたように見える」原因になっていた。
+    className: "overflow-y-auto overflow-x-hidden px-5 py-4"
   }, children)));
 };
 var Confirm = function Confirm(_ref5) {
@@ -5710,12 +5733,12 @@ function ShiftReportScreen(_ref100) {
         /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 border-b border-gray-100" }, /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-400" }, "車両番号", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")), /*#__PURE__*/React.createElement("input", { value: form.vehicle, onChange: function onChange(e) { return f("vehicle", e.target.value); }, className: "w-full border border-gray-300 rounded px-2 py-1 text-sm mt-1" })),
         /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 border-b border-gray-100" }, /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-400" }, "出庫地", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")), /*#__PURE__*/React.createElement("input", { value: form.departureLoc, onChange: function onChange(e) { return f("departureLoc", e.target.value); }, className: "w-full border border-gray-200 rounded px-2 py-1 text-sm mt-1" })),
         /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 border-b border-gray-100" }, /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-400" }, "出庫時メーター", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")), /*#__PURE__*/React.createElement("div", { className: "flex items-center gap-2 mt-1" }, /*#__PURE__*/React.createElement("input", { value: form.odometerOut, onChange: handleNumericChange("odometerOut"), inputMode: "numeric", pattern: "[0-9]*", className: "flex-1 border border-gray-200 rounded px-2 py-1 text-sm text-right" }), /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-500" }, "km"))),
-        /*#__PURE__*/React.createElement("div", { className: "px-3 py-2" }, /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-400" }, "天気", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")), /*#__PURE__*/React.createElement("div", { className: "flex gap-2 mt-2" }, [{ key: "sun", label: "晴" }, { key: "cloud", label: "曇" }, { key: "rain", label: "雨" }, { key: "snow", label: "雪" }].map(function (w) {
+        /*#__PURE__*/React.createElement("div", { className: "px-3 py-2" }, /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-400" }, "天気", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")), /*#__PURE__*/React.createElement("div", { className: "flex gap-2 mt-2" }, [{ key: "sun", label: "晴", emoji: "\u2600\uFE0F" }, { key: "cloud", label: "曇", emoji: "\u2601\uFE0F" }, { key: "rain", label: "雨", emoji: "\uD83C\uDF27\uFE0F" }, { key: "snow", label: "雪", emoji: "\u2744\uFE0F" }].map(function (w) {
           return /*#__PURE__*/React.createElement("button", {
             key: w.key,
             onClick: function onClick() { return f("weather", w.key); },
             className: "flex flex-col items-center justify-center w-14 h-12 rounded-lg border-2 gap-0.5 ".concat(form.weather === w.key ? "border-teal-500 bg-teal-50 text-teal-600" : "border-gray-200 bg-gray-50 text-gray-400")
-          }, /*#__PURE__*/React.createElement("span", { className: "text-[11px] font-bold" }, w.label));
+          }, /*#__PURE__*/React.createElement("span", { className: "text-lg" }, w.emoji), /*#__PURE__*/React.createElement("span", { className: "text-[11px] font-bold" }, w.label));
         }))))
     : /*#__PURE__*/React.createElement("div", {
         className: "bg-white rounded-xl border border-gray-200 overflow-hidden"
