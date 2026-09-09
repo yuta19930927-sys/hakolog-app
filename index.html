@@ -4347,6 +4347,16 @@ function EntrySheet(_ref14) {
     onDelete = _ref14.onDelete,
     onClose = _ref14.onClose;
   var routes = Array.isArray(profile === null || profile === void 0 ? void 0 : profile.routes) ? profile.routes : [];
+  // 【重要・不具合修正】以前は、二重タップ（素早く2回押す・回線が遅く
+  // 反応が遅れて焦って連打する等）を防ぐ仕組みが、Reactの state
+  // （saving）だけに頼っていた。しかし、React の state 更新は非同期
+  // なため、ほぼ同時に2回押されると、2回目の呼び出しが「まだ保存中では
+  // ない」という、更新前の古い判定のまま処理を始めてしまい、それぞれが
+  // 別々のID（DR-の後ろがそれぞれ別の値）を発行して、まったく同じ内容の
+  // 実績が、2件、別々に保存されてしまっていた（実際に発見・再現した）。
+  // useRef は、setState と違って即座に（同期的に）反映されるため、
+  // ここで、確実な二重送信防止に使う。
+  var submittingRef = useRef(false);
   var _useState29 = useState(function () {
       var _routes$, _routes$2, _jobTypes$;
       return editing || {
@@ -4448,7 +4458,7 @@ function EntrySheet(_ref14) {
       return _regenerator().w(function (_context12) {
         while (1) switch (_context12.n) {
           case 0:
-            if (!(!canSave || locked)) {
+            if (!(!canSave || locked || submittingRef.current)) {
               _context12.n = 1;
               break;
             }
@@ -4478,10 +4488,12 @@ function EntrySheet(_ref14) {
             _context12.n = 2;
             break;
           case 2:
+            submittingRef.current = true;
             setSaving(true);
             _context12.n = 3;
             return onSave(_objectSpread(_objectSpread({}, form), amounts), mode);
           case 3:
+            submittingRef.current = false;
             setSaving(false);
           case 4:
             return _context12.a(2);
@@ -4527,7 +4539,8 @@ function EntrySheet(_ref14) {
     onChange: function onChange(e) {
       return f("date", e.target.value);
     },
-    className: "w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-base focus:outline-none focus:border-teal-500"
+    className: "w-full min-w-0 max-w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-base focus:outline-none focus:border-teal-500",
+    style: { boxSizing: "border-box" }
   })), /*#__PURE__*/React.createElement(Field, {
     label: "\u6848\u4EF6\uFF08\u9867\u5BA2\uFF09"
   }, /*#__PURE__*/React.createElement("select", {
@@ -5178,7 +5191,7 @@ function PayoutScreen(_ref20) {
     className: "text-[11px] text-amber-600 mt-0.5"
   }, "\u627F\u8A8D\u3055\u308C\u308B\u3068\u4E0A\u306E\u91D1\u984D\u306B\u52A0\u7B97\u3055\u308C\u307E\u3059")), /*#__PURE__*/React.createElement("p", {
     className: "text-lg font-black text-amber-700"
-  }, "+", yen(p.pendingAmount))), p.rejectedCount > 0 && /*#__PURE__*/React.createElement("div", {
+  }, yen(p.pendingAmount))), p.rejectedCount > 0 && /*#__PURE__*/React.createElement("div", {
     className: "bg-red-50 border-t-2 border-red-200 px-4 py-3"
   }, /*#__PURE__*/React.createElement("p", {
     className: "text-xs font-bold text-red-700"
@@ -6062,9 +6075,6 @@ function ScheduleScreen(_ref38) {
   var selSales = sel.recs.reduce(function (s, r) {
     return s + num(r.driverAmount);
   }, 0);
-  var selJobsExpected = (sel.jobs || []).reduce(function (s, o) {
-    return s + num(o.driverPayAmount);
-  }, 0);
   return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(ScreenHeader, {
     title: "予定"
   }), /*#__PURE__*/React.createElement("div", {
@@ -6151,9 +6161,7 @@ function ScheduleScreen(_ref38) {
     className: "text-xs font-bold text-gray-600"
   }, selected), /*#__PURE__*/React.createElement("div", {
     className: "flex items-center gap-2"
-  }, selJobsExpected > 0 && /*#__PURE__*/React.createElement("p", {
-    className: "text-[11px] font-bold text-blue-500"
-  }, "見込み", yen(selJobsExpected)), selSales > 0 && /*#__PURE__*/React.createElement("p", {
+  }, selSales > 0 && /*#__PURE__*/React.createElement("p", {
     className: "text-xs font-bold text-teal-600"
   }, yen(selSales)))), sel.recs.length === 0 && sel.evs.length === 0 && (sel.jobs || []).length === 0 && /*#__PURE__*/React.createElement("p", {
     className: "px-4 py-8 text-center text-sm text-gray-400"
@@ -6469,7 +6477,21 @@ function ProfileScreen(_ref41) {
       address: (profile === null || profile === void 0 ? void 0 : profile.address) || "",
       emergencyName: (profile === null || profile === void 0 ? void 0 : profile.emergencyName) || "",
       emergencyRelation: (profile === null || profile === void 0 ? void 0 : profile.emergencyRelation) || "",
-      emergencyPhone: (profile === null || profile === void 0 ? void 0 : profile.emergencyPhone) || ""
+      emergencyPhone: (profile === null || profile === void 0 ? void 0 : profile.emergencyPhone) || "",
+      licenseNumber: (profile === null || profile === void 0 ? void 0 : profile.licenseNumber) || "",
+      license: (profile === null || profile === void 0 ? void 0 : profile.license) || "普通",
+      licenseType: (profile === null || profile === void 0 ? void 0 : profile.licenseType) || "",
+      licenseAcquired: (profile === null || profile === void 0 ? void 0 : profile.licenseAcquired) || "",
+      license_expiry: (profile === null || profile === void 0 ? void 0 : profile.license_expiry) || "",
+      licenseCondition: (profile === null || profile === void 0 ? void 0 : profile.licenseCondition) || "",
+      vehicleNumber: (profile === null || profile === void 0 ? void 0 : profile.vehicleNumber) || "",
+      chassisNumber: (profile === null || profile === void 0 ? void 0 : profile.chassisNumber) || "",
+      vehicleOwnership: (profile === null || profile === void 0 ? void 0 : profile.vehicleOwnership) || "",
+      vehicleInspectionExpiry: (profile === null || profile === void 0 ? void 0 : profile.vehicleInspectionExpiry) || "",
+      liabilityInsuranceExpiry: (profile === null || profile === void 0 ? void 0 : profile.liabilityInsuranceExpiry) || "",
+      insuranceCompany: (profile === null || profile === void 0 ? void 0 : profile.insuranceCompany) || "",
+      insurancePolicyNumber: (profile === null || profile === void 0 ? void 0 : profile.insurancePolicyNumber) || "",
+      insuranceCoverage: (profile === null || profile === void 0 ? void 0 : profile.insuranceCoverage) || ""
     }),
     _useState54 = _slicedToArray(_useState53, 2),
     form = _useState54[0],
@@ -6555,9 +6577,7 @@ function ProfileScreen(_ref41) {
       className: "block text-[10px] text-red-500 font-bold mt-0.5"
     }, "\u671F\u9650\u5207\u308C\u3067\u3059\u3002\u4F1A\u793E\u306B\u3054\u78BA\u8A8D\u304F\u3060\u3055\u3044"), status === "soon" && /*#__PURE__*/React.createElement("span", {
       className: "block text-[10px] text-amber-600 font-bold mt-0.5"
-    }, "\u3042\u3068", daysLeft, "\u65E5"), /*#__PURE__*/React.createElement("span", {
-      className: "block text-[10px] text-gray-300 mt-0.5"
-    }, "\u4F1A\u793E\u306E\u307F\u5909\u66F4\u53EF")));
+    }, "\u3042\u3068", daysLeft, "\u65E5")));
   };
   var mask = function mask(v) {
     return v ? "".concat("•".repeat(Math.max(0, String(v).length - 4))).concat(String(v).slice(-4)) : "";
@@ -6665,6 +6685,132 @@ function ProfileScreen(_ref41) {
       });
     },
     className: "w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-base focus:outline-none focus:border-teal-500"
+  })), /*#__PURE__*/React.createElement("p", {
+    className: "text-xs font-bold text-gray-600 mt-4 mb-2"
+  }, "\u514D\u8A31\u60C5\u5831"), /*#__PURE__*/React.createElement(Field, {
+    label: "\u514D\u8A31\u8A3C\u756A\u53F7"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: form.licenseNumber,
+    onChange: function onChange(e) {
+      return setForm(function (p) { return _objectSpread(_objectSpread({}, p), {}, { licenseNumber: e.target.value }); });
+    },
+    className: "w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-base focus:outline-none focus:border-teal-500"
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "\u514D\u8A31\u7A2E\u985E"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: form.license,
+    onChange: function onChange(e) {
+      return setForm(function (p) { return _objectSpread(_objectSpread({}, p), {}, { license: e.target.value }); });
+    },
+    className: "w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-base focus:outline-none focus:border-teal-500 bg-white"
+  }, /*#__PURE__*/React.createElement("option", { value: "\u5927\u578B" }, "\u5927\u578B"), /*#__PURE__*/React.createElement("option", { value: "\u4E2D\u578B" }, "\u4E2D\u578B"), /*#__PURE__*/React.createElement("option", { value: "\u666E\u901A" }, "\u666E\u901A"))), /*#__PURE__*/React.createElement(Field, {
+    label: "\u514D\u8A31\u7A2E\u985E\uFF08\u6B63\u5F0F\u540D\u79F0\uFF09"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: form.licenseType,
+    placeholder: "\u4F8B\uFF1A\u666E\u901A\u7B2C\u4E00\u7A2E\u904B\u8EE2\u514D\u8A31",
+    onChange: function onChange(e) {
+      return setForm(function (p) { return _objectSpread(_objectSpread({}, p), {}, { licenseType: e.target.value }); });
+    },
+    className: "w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-base focus:outline-none focus:border-teal-500"
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "\u514D\u8A31\u53D6\u5F97\u65E5"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    value: form.licenseAcquired,
+    onChange: function onChange(e) {
+      return setForm(function (p) { return _objectSpread(_objectSpread({}, p), {}, { licenseAcquired: e.target.value }); });
+    },
+    className: "w-full min-w-0 max-w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-base focus:outline-none focus:border-teal-500",
+    style: { boxSizing: "border-box" }
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "\u6709\u52B9\u671F\u9650\uFF08\u514D\u8A31\u66F4\u65B0\u65E5\uFF09"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    value: form.license_expiry,
+    onChange: function onChange(e) {
+      return setForm(function (p) { return _objectSpread(_objectSpread({}, p), {}, { license_expiry: e.target.value }); });
+    },
+    className: "w-full min-w-0 max-w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-base focus:outline-none focus:border-teal-500",
+    style: { boxSizing: "border-box" }
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "\u514D\u8A31\u6761\u4EF6"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: form.licenseCondition,
+    placeholder: "\u4F8B\uFF1AAT\u9650\u5B9A\u30FB\u773C\u93E1\u7B49",
+    onChange: function onChange(e) {
+      return setForm(function (p) { return _objectSpread(_objectSpread({}, p), {}, { licenseCondition: e.target.value }); });
+    },
+    className: "w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-base focus:outline-none focus:border-teal-500"
+  })), /*#__PURE__*/React.createElement("p", {
+    className: "text-xs font-bold text-gray-600 mt-4 mb-2"
+  }, "\u8ECA\u4E21\u30FB\u4FDD\u967A\u60C5\u5831"), /*#__PURE__*/React.createElement(Field, {
+    label: "\u4F7F\u7528\u8ECA\u4E21\u767B\u9332\u756A\u53F7"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: form.vehicleNumber,
+    onChange: function onChange(e) {
+      return setForm(function (p) { return _objectSpread(_objectSpread({}, p), {}, { vehicleNumber: e.target.value }); });
+    },
+    className: "w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-base focus:outline-none focus:border-teal-500"
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "\u8ECA\u53F0\u756A\u53F7"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: form.chassisNumber,
+    onChange: function onChange(e) {
+      return setForm(function (p) { return _objectSpread(_objectSpread({}, p), {}, { chassisNumber: e.target.value }); });
+    },
+    className: "w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-base focus:outline-none focus:border-teal-500"
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "\u8ECA\u4E21\u6240\u6709\u533A\u5206"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: form.vehicleOwnership,
+    onChange: function onChange(e) {
+      return setForm(function (p) { return _objectSpread(_objectSpread({}, p), {}, { vehicleOwnership: e.target.value }); });
+    },
+    className: "w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-base focus:outline-none focus:border-teal-500 bg-white"
+  }, /*#__PURE__*/React.createElement("option", { value: "" }, "\u9078\u629E"), /*#__PURE__*/React.createElement("option", { value: "\u672C\u4EBA\u6240\u6709" }, "\u672C\u4EBA\u6240\u6709"), /*#__PURE__*/React.createElement("option", { value: "\u30EA\u30FC\u30B9" }, "\u30EA\u30FC\u30B9"), /*#__PURE__*/React.createElement("option", { value: "\u4F1A\u793E\u6240\u6709" }, "\u4F1A\u793E\u6240\u6709"))), /*#__PURE__*/React.createElement(Field, {
+    label: "\u8ECA\u691C\u6709\u52B9\u671F\u9650"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    value: form.vehicleInspectionExpiry,
+    onChange: function onChange(e) {
+      return setForm(function (p) { return _objectSpread(_objectSpread({}, p), {}, { vehicleInspectionExpiry: e.target.value }); });
+    },
+    className: "w-full min-w-0 max-w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-base focus:outline-none focus:border-teal-500",
+    style: { boxSizing: "border-box" }
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "\u81EA\u8CE0\u8CAC\u4FDD\u967A\u671F\u9650"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    value: form.liabilityInsuranceExpiry,
+    onChange: function onChange(e) {
+      return setForm(function (p) { return _objectSpread(_objectSpread({}, p), {}, { liabilityInsuranceExpiry: e.target.value }); });
+    },
+    className: "w-full min-w-0 max-w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-base focus:outline-none focus:border-teal-500",
+    style: { boxSizing: "border-box" }
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "\u4EFB\u610F\u4FDD\u967A\u4F1A\u793E"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: form.insuranceCompany,
+    onChange: function onChange(e) {
+      return setForm(function (p) { return _objectSpread(_objectSpread({}, p), {}, { insuranceCompany: e.target.value }); });
+    },
+    className: "w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-base focus:outline-none focus:border-teal-500"
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "\u4EFB\u610F\u4FDD\u967A\u8A3C\u5238\u756A\u53F7"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: form.insurancePolicyNumber,
+    onChange: function onChange(e) {
+      return setForm(function (p) { return _objectSpread(_objectSpread({}, p), {}, { insurancePolicyNumber: e.target.value }); });
+    },
+    className: "w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-base focus:outline-none focus:border-teal-500"
+  })), /*#__PURE__*/React.createElement(Field, {
+    label: "\u5BFE\u4EBA\u30FB\u5BFE\u7269\u88DC\u511F\u984D"
+  }, /*#__PURE__*/React.createElement("input", {
+    value: form.insuranceCoverage,
+    onChange: function onChange(e) {
+      return setForm(function (p) { return _objectSpread(_objectSpread({}, p), {}, { insuranceCoverage: e.target.value }); });
+    },
+    className: "w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-base focus:outline-none focus:border-teal-500"
   })), /*#__PURE__*/React.createElement("div", {
     className: "flex gap-2 mt-2"
   }, /*#__PURE__*/React.createElement("button", {
@@ -6748,30 +6894,61 @@ function ProfileScreen(_ref41) {
     className: "px-4 py-2 bg-gray-50 border-b border-gray-100"
   }, /*#__PURE__*/React.createElement("p", {
     className: "text-xs font-bold text-gray-600"
-  }, "\u514D\u8A31\u30FB\u8ECA\u691C\uFF08\u4F1A\u793E\u306E\u307F\u5909\u66F4\u3067\u304D\u307E\u3059\uFF09")), /*#__PURE__*/React.createElement(Row, {
-    label: "\u904B\u8EE2\u514D\u8A31\u306E\u7A2E\u985E",
-    value: profile === null || profile === void 0 ? void 0 : profile.license,
-    locked: true
+  }, "\u514D\u8A31\u60C5\u5831")), /*#__PURE__*/React.createElement(Row, {
+    label: "\u514D\u8A31\u8A3C\u756A\u53F7",
+    value: profile === null || profile === void 0 ? void 0 : profile.licenseNumber
+  }), /*#__PURE__*/React.createElement(Row, {
+    label: "\u514D\u8A31\u7A2E\u985E",
+    value: profile === null || profile === void 0 ? void 0 : profile.license
+  }), /*#__PURE__*/React.createElement(Row, {
+    label: "\u514D\u8A31\u7A2E\u985E\uFF08\u6B63\u5F0F\u540D\u79F0\uFF09",
+    value: profile === null || profile === void 0 ? void 0 : profile.licenseType
+  }), /*#__PURE__*/React.createElement(Row, {
+    label: "\u514D\u8A31\u53D6\u5F97\u65E5",
+    value: profile === null || profile === void 0 ? void 0 : profile.licenseAcquired
   }), /*#__PURE__*/React.createElement(ExpiryRow, {
     label: "\u514D\u8A31\u66F4\u65B0\u671F\u9650",
     value: profile === null || profile === void 0 ? void 0 : profile.license_expiry
-  }), /*#__PURE__*/React.createElement(ExpiryRow, {
-    label: "\u8ECA\u691C\u6E80\u4E86",
-    value: profile === null || profile === void 0 ? void 0 : profile.vehicleInspectionExpiry
-  }), /*#__PURE__*/React.createElement(ExpiryRow, {
-    label: "\u81EA\u8CE0\u8CAC\u671F\u9650",
-    value: profile === null || profile === void 0 ? void 0 : profile.liabilityInsuranceExpiry
+  }), /*#__PURE__*/React.createElement(Row, {
+    label: "\u514D\u8A31\u6761\u4EF6",
+    value: profile === null || profile === void 0 ? void 0 : profile.licenseCondition
   })), /*#__PURE__*/React.createElement(Card, {
     className: "overflow-hidden flex-shrink-0"
   }, /*#__PURE__*/React.createElement("div", {
     className: "px-4 py-2 bg-gray-50 border-b border-gray-100"
   }, /*#__PURE__*/React.createElement("p", {
     className: "text-xs font-bold text-gray-600"
-  }, "\u8ECA\u4E21\u30FB\u30A4\u30F3\u30DC\u30A4\u30B9\uFF08\u4F1A\u793E\u306E\u307F\u5909\u66F4\u3067\u304D\u307E\u3059\uFF09")), /*#__PURE__*/React.createElement(Row, {
-    label: "\u8ECA\u4E21\u756A\u53F7",
-    value: profile === null || profile === void 0 ? void 0 : profile.vehicleNumber,
-    locked: true
+  }, "\u8ECA\u4E21\u30FB\u4FDD\u967A\u60C5\u5831")), /*#__PURE__*/React.createElement(Row, {
+    label: "\u4F7F\u7528\u8ECA\u4E21\u767B\u9332\u756A\u53F7",
+    value: profile === null || profile === void 0 ? void 0 : profile.vehicleNumber
   }), /*#__PURE__*/React.createElement(Row, {
+    label: "\u8ECA\u53F0\u756A\u53F7",
+    value: profile === null || profile === void 0 ? void 0 : profile.chassisNumber
+  }), /*#__PURE__*/React.createElement(Row, {
+    label: "\u8ECA\u4E21\u6240\u6709\u533A\u5206",
+    value: profile === null || profile === void 0 ? void 0 : profile.vehicleOwnership
+  }), /*#__PURE__*/React.createElement(ExpiryRow, {
+    label: "\u8ECA\u691C\u6E80\u4E86",
+    value: profile === null || profile === void 0 ? void 0 : profile.vehicleInspectionExpiry
+  }), /*#__PURE__*/React.createElement(ExpiryRow, {
+    label: "\u81EA\u8CE0\u8CAC\u671F\u9650",
+    value: profile === null || profile === void 0 ? void 0 : profile.liabilityInsuranceExpiry
+  }), /*#__PURE__*/React.createElement(Row, {
+    label: "\u4EFB\u610F\u4FDD\u967A\u4F1A\u793E",
+    value: profile === null || profile === void 0 ? void 0 : profile.insuranceCompany
+  }), /*#__PURE__*/React.createElement(Row, {
+    label: "\u4EFB\u610F\u4FDD\u967A\u8A3C\u5238\u756A\u53F7",
+    value: profile === null || profile === void 0 ? void 0 : profile.insurancePolicyNumber
+  }), /*#__PURE__*/React.createElement(Row, {
+    label: "\u5BFE\u4EBA\u30FB\u5BFE\u7269\u88DC\u511F\u984D",
+    value: profile === null || profile === void 0 ? void 0 : profile.insuranceCoverage
+  })), /*#__PURE__*/React.createElement(Card, {
+    className: "overflow-hidden flex-shrink-0"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "px-4 py-2 bg-gray-50 border-b border-gray-100"
+  }, /*#__PURE__*/React.createElement("p", {
+    className: "text-xs font-bold text-gray-600"
+  }, "\u30A4\u30F3\u30DC\u30A4\u30B9\uFF08\u4F1A\u793E\u306E\u307F\u5909\u66F4\u3067\u304D\u307E\u3059\uFF09")), /*#__PURE__*/React.createElement(Row, {
     label: "\u30A4\u30F3\u30DC\u30A4\u30B9",
     locked: true,
     value: profile !== null && profile !== void 0 && profile.invoiceRegistered ? profile.invoiceRegNo || "登録済（番号未設定）" : "未登録"
@@ -8029,7 +8206,17 @@ function App() {
    * 振込先口座を書き換えたりできてしまう（給与の不正操作）。
    * 「画面に出していないから安全」は通用しない。ここで弾く。
    */
-  var SELF_EDITABLE = ["phone", "email", "address", "emergencyName", "emergencyRelation", "emergencyPhone"];
+  // 【機能追加・ユーザー要望】ハコマネの運転者台帳にある項目のうち、
+  // ドライバー本人が一番よく知っていて、更新のたびに会社を通さなくても
+  // 自分で直接入力できた方が実務的な項目（免許・車両・保険関連）を、
+  // ハコログからも入力・反映できるようにする。
+  // 一方、契約内容・報酬・振込口座など、お金や契約に関わる項目は、
+  // 引き続き会社のみが変更できる（ドライバーが自由に書き換えられて
+  // しまうと、不正やトラブルの元になるため、意図的にロックしたまま）。
+  var SELF_EDITABLE = ["phone", "email", "address", "emergencyName", "emergencyRelation", "emergencyPhone",
+    "licenseNumber", "license", "licenseType", "licenseAcquired", "license_expiry", "licenseCondition",
+    "vehicleNumber", "chassisNumber", "vehicleOwnership", "vehicleInspectionExpiry", "liabilityInsuranceExpiry",
+    "insuranceCompany", "insurancePolicyNumber", "insuranceCoverage"];
   var saveSelfProfile = /*#__PURE__*/function () {
     var _ref52 = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee22(fields) {
       var safe, next, _dbId, payload, _t12;
@@ -8314,6 +8501,56 @@ function App() {
   var handleLogin = function handleLogin(d) {
     setDriver(d);
     LS.set(K_DRIVER, d);
+    // 【重要・不具合修正】以前は、ログアウトのタイミングで、一時保存
+    // （K_SR_DRAFT）を、ドライバーを問わず全部消していた。共有端末で、
+    // 前のドライバーの入力途中の内容が、次のドライバーに見えてしまう
+    // ことを防ぐための処理だったが、これだと「同じドライバーが、
+    // 何らかの理由でログアウト（セッション切れ含む）してから、また
+    // ログインし直す」という、ごく普通の使い方をしただけで、自分自身の
+    // 一時保存が消えてしまい、「一時保存して戻る」機能が、実質使えない
+    // 状態になっていた（実際に発見・再現した重大な不具合）。
+    // 「共有端末での見えてしまう問題」自体は、ログアウト時ではなく、
+    // 次に「誰か」がログインしてきた、この瞬間にこそ対処すればよい。
+    // ここで、今ログインしてきたドライバー以外の、下書きだけを消す
+    // ことで、プライバシーも守りつつ、本人の一時保存はそのまま残す。
+    try {
+      var myDraftPrefix = "".concat(K_SR_DRAFT, "_").concat(d && d.driverRecordId, "_");
+      var draftKeysToRemove = [];
+      if (storageAvailable) {
+        for (var i = 0; i < window.localStorage.length; i++) {
+          var k = window.localStorage.key(i);
+          if (k && k.indexOf(K_SR_DRAFT) === 0 && k.indexOf(myDraftPrefix) !== 0) {
+            draftKeysToRemove.push(k);
+          }
+        }
+      } else {
+        Object.keys(memStore).forEach(function (k) {
+          if (k.indexOf(K_SR_DRAFT) === 0 && k.indexOf(myDraftPrefix) !== 0) draftKeysToRemove.push(k);
+        });
+      }
+      draftKeysToRemove.forEach(function (k) { return LS.del(k); });
+    } catch (_unused8) {}
+    // 【機能追加・不具合修正】サーバーに、今日の分でまだ終了していない
+    // （稼働開始はされているが、稼働終了はまだ）稼働記録が残っていれば、
+    // ログアウト（セッション切れ含む）によって失われていた「稼働中」の
+    // 状態を、正しく復元する。これが無いと、稼働中にセッション切れ等で
+    // ログアウトされた場合、再ログイン後、稼働中だったはずが、いきなり
+    // 「稼働開始前」の状態に戻ってしまい、その回の乗務後日報・一時保存に、
+    // 二度とたどり着けなくなってしまっていた（実際に発見・確認した、
+    // 「一時保存して戻る」が実質使えなくなる不具合の、もう1つの原因）。
+    if (d && d.tenantId && d.driverRecordId) {
+      api.listMine("shift_records", d.tenantId, d.driverRecordId).then(function (rows) {
+        var today = ymd();
+        var active = (rows || []).find(function (r) {
+          return r.date === today && r.startAt && !r.endAt;
+        });
+        if (active) {
+          var restored = { date: active.date, startAt: active.startAt, endAt: null, shiftId: active.shiftId || null };
+          setShift(restored);
+          LS.set(K_SHIFT, restored);
+        }
+      }).catch(function () {});
+    }
     // 【機能追加】管理者が設定した、初期パスワードのまま、30日を
     // 過ぎている場合、通常のホーム画面より前に、パスワードの変更を、
     // 求める、専用の画面に、進む。
@@ -8371,25 +8608,13 @@ function App() {
     // 必ずここで削除する（詳しい理由は上記コメントを参照）。
     LS.del(K_QUEUE);
     LS.del(K_QUEUE_SR);
-    // 【重要・不具合修正】一時保存の下書き（K_SR_DRAFT）は、ドライバーID・
-    // 日付ごとに、動的なキー名で保存されているため、他の項目のように、
-    // 固定のキー名を指定して削除することができない。前のドライバーの
-    // 入力途中の内容が、次にこの端末を使うドライバーに、誤って見えて
-    // しまわないよう、該当するキーを、すべて洗い出して削除する。
-    try {
-      var draftKeysToRemove = [];
-      if (storageAvailable) {
-        for (var i = 0; i < window.localStorage.length; i++) {
-          var k = window.localStorage.key(i);
-          if (k && k.indexOf(K_SR_DRAFT) === 0) draftKeysToRemove.push(k);
-        }
-      } else {
-        Object.keys(memStore).forEach(function (k) {
-          if (k.indexOf(K_SR_DRAFT) === 0) draftKeysToRemove.push(k);
-        });
-      }
-      draftKeysToRemove.forEach(function (k) { return LS.del(k); });
-    } catch (_unused7) {}
+    // 【重要・不具合修正】一時保存の下書き（K_SR_DRAFT）は、以前はここ
+    // （ログアウト時）で、ドライバーを問わず全部削除していたが、それだと
+    // 「一時保存して戻る」を使った直後に、何らかの理由でログアウトされて
+    // しまうと（セッション切れ等）、自分自身の一時保存まで消えてしまう
+    // という重大な不具合になっていた。共有端末での配慮は、次にログイン
+    // してきた人のタイミング（handleLogin側）で行うことにしたため、
+    // ここでは、もう一時保存を消さない。
     setProfile(null);
     setRecords([]);
     setShiftReports([]);
