@@ -51,8 +51,42 @@
     max-width: 100vw;
   }
   #root { height: 100%; overflow: hidden; }
+  /* 【検証7回目・不具合の根本修正】画面の縦スクロール領域（flex-1 overflow-y-auto flex-col）の
+     中のカードは、内容が画面より長いと「縮んで」しまい、overflow-hidden のカードでは
+     下の行（支給合計・控除合計・差戻しの案内など）が見えなくなっていた。
+     スクロール領域の直下の要素は縮めず、はみ出た分はスクロールで見せる。 */
+  .overflow-y-auto.flex-col > * { flex-shrink: 0; }
   input, textarea, select, button { font-family: inherit; }
   button { min-height: 44px; }
+
+  /* 【重要・不具合修正】iPhone（iOS Safari）の日付入力欄は、内部に
+     「年」「月」「日」といった、ブラウザが自動で用意する部品を持って
+     いる。この内部部品には iOS 独自の「これ以上は縮まない最小幅」が
+     設定されており、それが親要素の幅より大きいと、指定を無視して外に
+     はみ出し、画面全体が横にドラッグできる状態になっていた。
+     内部部品の側に縮小を許可することで、枠内に収める。
+     ※ -webkit-appearance:none は指定しないこと。指定すると枠線・角丸
+     　などの見た目まで消えてしまい、他の入力欄と揃わなくなる
+     　（実際にそうなってしまい、作り直した）。 */
+  input[type="date"] {
+    max-width: 100%;
+    min-width: 0;
+    width: 100%;
+    box-sizing: border-box;
+  }
+  input[type="date"]::-webkit-date-and-time-value {
+    text-align: left;
+    min-width: 0;
+    max-width: 100%;
+    margin: 0;
+  }
+  input[type="date"]::-webkit-datetime-edit,
+  input[type="date"]::-webkit-datetime-edit-fields-wrapper {
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    padding: 0;
+  }
 
   /* ホーム画面から全画面で起動したとき、iPhone の時計に画面が隠れて
      しまうのを防ぐ（上部の安全領域のみ、ここでbodyに適用する）。
@@ -1338,9 +1372,9 @@ var relativeDateLabel = function relativeDateLabel(dateStr) {
     直近3ヶ月分（今月＋過去2ヶ月）だけに絞り込む。過去のお知らせを
     確認したい需要にも、ある程度応えられる範囲。 */
 var eventsDateRangeFilter = function eventsDateRangeFilter() {
-  var d = new Date();
-  d.setMonth(d.getMonth() - 2);
-  d.setDate(1);
+  // 月末日（例：4/30）に setMonth すると存在しない日付（2/30）が翌月に繰り越されるため、1日で作る
+  var now0 = new Date();
+  var d = new Date(now0.getFullYear(), now0.getMonth() - 2, 1);
   var cutoff = ymd(d);
   return "&payload->>date=gte.".concat(cutoff);
 };
@@ -1523,8 +1557,8 @@ var _thisMonth = function _thisMonth(day) {
   return "".concat(d.getFullYear(), "-").concat(_pad(d.getMonth() + 1), "-").concat(_pad(day));
 };
 var _lastMonth = function _lastMonth(day) {
-  var d = new Date();
-  d.setMonth(d.getMonth() - 1);
+  var now0 = new Date();
+  var d = new Date(now0.getFullYear(), now0.getMonth() - 1, 1);
   return "".concat(d.getFullYear(), "-").concat(_pad(d.getMonth() + 1), "-").concat(_pad(day));
 };
 var _daysFromNow = function _daysFromNow(n) {
@@ -1882,6 +1916,17 @@ var localApi = {
             localDB.save();
             return _context3.a(2, dbId);
           case 1:
+            // 本番（upsertRecord）と同じく、行IDが分からない場合は業務ID（payload.id）で既存行を探して上書きする
+            if (payload && payload.id != null) {
+              i = db[table].findIndex(function (r) {
+                return r.tenant_id === tenantId && r.payload && r.payload.id === payload.id;
+              });
+              if (i >= 0) {
+                db[table][i] = _objectSpread(_objectSpread({}, db[table][i]), {}, { payload: payload });
+                localDB.save();
+                return _context3.a(2, db[table][i].id);
+              }
+            }
             newId = "row-".concat(Date.now(), "-").concat(Math.random().toString(36).slice(2, 7));
             db[table].push({
               id: newId,
@@ -1992,8 +2037,9 @@ var localApi = {
             return _context6.a(2, null);
           case 1:
             d = localDB.get().drivers[0];
+            // 本番と同じく、driverId はドライバー台帳の行IDと同じにする（チャット等の宛先がずれないように）
             return _context6.a(2, {
-              driverId: "D001",
+              driverId: d.payload.id,
               tenantId: LOCAL_TENANT,
               driverName: d.payload.name,
               driverRecordId: d.payload.id
@@ -2404,7 +2450,9 @@ var api = {
     const p = driverRow?.payload || {};
 
     // 【重要】契約終了日を過ぎたドライバーはログインさせない。
-    const today = new Date().toISOString().slice(0, 10);
+    // 日本時間の日付で比較する（toISOString は世界標準時のため、朝9時まで前日扱いになっていた）
+    const _n = new Date();
+    const today = `${_n.getFullYear()}-${String(_n.getMonth() + 1).padStart(2, "0")}-${String(_n.getDate()).padStart(2, "0")}`;
     if (p.contractEnd && p.contractEnd < today) {
       const err = new Error("この契約は終了しています。会社にお問い合わせください。");
       err.code = "CONTRACT_ENDED";
@@ -2680,6 +2728,26 @@ var isMonthClosed = function isMonthClosed(companyInfo, month) {
  * 1件の配送実績から、売上とドライバー支払額を計算する。
  * ハコマネ側 calcAmounts と同一ロジック。片方だけ変更してはいけない。
  */
+// 【重要・不具合修正】デカ宅のサイズ別単価は、サイズごとに
+// 「担当ルートの個別単価があればそれ、無ければ仕事種別の標準単価」を使う。
+// 以前は担当ルートにサイズ別単価の枠（空欄）があるだけで標準単価が一切使われず、
+// 報酬・売上が0円になっていた（ハコマネの個建実績入力と同じ決め方にそろえる）。
+var mergeDekaRates = function mergeDekaRates(routeRates, jobTypeRates) {
+  var rr = Array.isArray(routeRates) ? routeRates : [];
+  var jr = Array.isArray(jobTypeRates) ? jobTypeRates : [];
+  var pick = function (a, b) { return a !== "" && a != null ? a : (b != null ? b : ""); };
+  var sizes = [];
+  jr.concat(rr).forEach(function (x) { if (x && x.size && sizes.indexOf(x.size) < 0) sizes.push(x.size); });
+  return sizes.map(function (size) {
+    var r = rr.find(function (x) { return x && x.size === size; }) || {};
+    var j = jr.find(function (x) { return x && x.size === size; }) || {};
+    return {
+      size: size,
+      unitPrice: pick(r.unitPrice, j.unitPrice),
+      driverUnitPrice: pick(r.driverPrice != null ? r.driverPrice : r.driverUnitPrice, j.driverPrice != null ? j.driverPrice : j.driverUnitPrice)
+    };
+  });
+};
 var calcRecordAmounts = function calcRecordAmounts(form, jobType, dekaRates, route) {
   var pattern = (jobType === null || jobType === void 0 ? void 0 : jobType.calcPattern) || "count";
   // 【重要・不具合修正】単価は「①フォームで直接上書きされた値 → ②担当ルートの
@@ -2702,12 +2770,13 @@ var calcRecordAmounts = function calcRecordAmounts(form, jobType, dekaRates, rou
   if ((jobType === null || jobType === void 0 ? void 0 : jobType.name) === "デカ宅" && Array.isArray(dekaRates)) {
     var dekaCounts = form.dekaCounts || {};
     dekaRates.forEach(function (rate) {
-      var qty = num(dekaCounts[rate.size]);
+      var qty = Math.round(num(dekaCounts[rate.size]));
       sales += qty * num(rate.unitPrice);
       driver += qty * num(rate.driverPrice != null ? rate.driverPrice : rate.driverUnitPrice);
     });
   } else if (pattern === "count") {
-    var c = num(form.count);
+    // 個数は整数（ハコマネ側と同じく四捨五入）
+    var c = Math.round(num(form.count));
     sales = c * up;
     driver = c * dup;
   } else if (pattern === "fixed") {
@@ -2727,9 +2796,12 @@ var calcRecordAmounts = function calcRecordAmounts(form, jobType, dekaRates, rou
   // 高速代・駐車場代は立替実費、燃料補助・その他は手当。
   // いずれも会社の売上ではなく、ドライバーへの支払に上乗せされる。
   var allowance = num(form.highwayFee) + num(form.parkingFee) + num(form.fuelAllowance) + num(form.otherAllowance);
+  // 【重要・不具合修正】17.9km × 55円 ＝ 984.5円 のような計算は、コンピューター内部では
+  // 984.4999… になり、そのまま四捨五入すると1円少なくなっていた。千分の一円でそろえてから四捨五入する。
+  var roundYen = function (v) { return Math.round(Math.round((Number(v) || 0) * 1000) / 1000); };
   return {
-    salesAmount: Math.round(sales + charterSales),
-    driverAmount: Math.round(driver + charterDriver + allowance)
+    salesAmount: roundYen(sales + charterSales),
+    driverAmount: roundYen(driver + charterDriver + allowance)
   };
 };
 
@@ -2743,11 +2815,55 @@ var calcRecordAmounts = function calcRecordAmounts(form, jobType, dekaRates, rou
  * @param {object|null} snapshot 月を締めた時点で固定されたドライバー設定。
  *   ハコマネと同じ理由・同じ形式で扱う。締めていない当月は null でよい。
  */
+// 【検証9回目で追加】実績1件の配送個数（ハコマネの recordParcelCount と同じ決め方）。
+// 以前は count だけを数えていたため、ハコマネの個建実績入力（配完個数・デカ宅のサイズ別）で入れた分が
+// 報酬画面・明細の「個数」に0個として出て、ハコマネの個数と食い違っていた。
+var recordParcelCount = function recordParcelCount(r) {
+  if (!r) return 0;
+  var c = Number(r.count);
+  if (isFinite(c) && c > 0) return c;
+  var done = Number(r["\u914D\u5B8C\u500B\u6570"]);
+  if (isFinite(done) && done > 0) return done;
+  var deka = 0;
+  if (r.dekaCounts && typeof r.dekaCounts === "object") {
+    Object.keys(r.dekaCounts).forEach(function (k) { deka += Number(r.dekaCounts[k]) || 0; });
+  }
+  if (deka === 0) {
+    Object.keys(r).forEach(function (k) { if (k.indexOf("deka_") === 0) deka += Number(r[k]) || 0; });
+  }
+  return deka;
+};
+// 【検証（ハコログ）で追加】一覧に出す「量」の表示。距離制・時間制・定額の仕事まで「0個」と出ていたため、
+// 距離は km、時間は 時間 で表示し、個数の無い定額の仕事は量を出さない。
+var recordQtyLabel = function recordQtyLabel(r) {
+  if (!r) return "";
+  if (num(r.distance) > 0) return "".concat(num(r.distance), "km");
+  if (num(r.hours) > 0) return "".concat(num(r.hours), "\u6642\u9593");
+  var c = recordParcelCount(r);
+  return c > 0 ? "".concat(c, "\u500B") : "";
+};
+// ロイヤリティの見出し（ハコマネの報酬明細と同じ書き方。ドライバーが自分で検算できるように根拠を併記する）
+var royaltyLabelOf = function royaltyLabelOf(p) {
+  if (!p) return "ロイヤリティ";
+  if (p.royaltyTypeUsed === "fixed") return "ロイヤリティ（固定）";
+  if (p.royaltyTypeUsed === "none") return "ロイヤリティ";
+  if (p.royaltyBaseSales != null && p.royaltyBaseSales !== p.sales) return "ロイヤリティ（対象売上 " + yen(p.royaltyBaseSales) + " の" + (num(p.royaltyRateUsed)) + "％）";
+  return "ロイヤリティ（売上の" + num(p.royaltyRateUsed) + "％）";
+};
 var calcPayout = function calcPayout(driver, records) {
   var snapshot = arguments.length > 2 && arguments[2] !== undefined ? arguments[2] : null;
   var all = (Array.isArray(records) ? records : []).filter(Boolean);
   // 締め済みの月なら固定された設定を、そうでなければ現在の設定を使う。
   var cfg = snapshot || driver || {};
+  var useUnitPriceRule = !snapshot || Number(snapshot.royaltyRule) >= 2;
+  var marginAlreadyTaken = function (r) {
+    if (!r) return false;
+    if (r.fixedDriverPay) return true;
+    var reimb = num(r.highwayFee) + num(r.parkingFee) + num(r.fuelAllowance) + num(r.otherAllowance);
+    var payForWork = num(r.driverAmount) - reimb;
+    if (payForWork < 0) payForWork = num(r.driverAmount);
+    return num(r.salesAmount) - payForWork > 0;
+  };
 
   // ★承認済みだけが報酬になる。ハコマネと完全に同じ基準。
   // ここを「全部」にすると、アプリの表示額と実際の振込額がズレて信用を失う。
@@ -2778,7 +2894,11 @@ var calcPayout = function calcPayout(driver, records) {
     // ある月は、ハコログの画面がロイヤリティを多めに計算してしまい、
     // 「実際の振込額より少ない金額」をドライバーに表示してしまう
     // 不一致があった（実際に数値で検証・確認した）。
-    if (!r.fixedDriverPay) royaltyBaseSales += num(r.salesAmount);
+    // 【利用者の指示で追加】支払単価（仕事種別・担当ルート）で会社の取り分が
+    // 確保されている実績も、ロイヤリティの対象から除く（ハコマネの
+    // recordMarginAlreadyTaken と同じ判定。必ず両方同時に直すこと）。
+    // 以前に締めた月（royaltyRule が無い固定設定）は従来の計算のまま。
+    if (!(useUnitPriceRule ? marginAlreadyTaken(r) : r.fixedDriverPay)) royaltyBaseSales += num(r.salesAmount);
     charter += num(r.charterDriver);
     highway += num(r.highwayFee);
     parking += num(r.parkingFee);
@@ -2797,13 +2917,13 @@ var calcPayout = function calcPayout(driver, records) {
     return r.date;
   }).filter(Boolean)).size;
   var totalCount = list.reduce(function (s, r) {
-    return s + num(r.count);
+    return s + recordParcelCount(r);
   }, 0);
   var grossPay = baseReward + charter + highway + parking + fuel + otherAllowance;
 
   // ロイヤリティ
   var royalty = 0;
-  if ((cfg === null || cfg === void 0 ? void 0 : cfg.royaltyType) === "fixed") royalty = num(cfg.royaltyFixed);else if ((cfg === null || cfg === void 0 ? void 0 : cfg.royaltyType) === "none") royalty = 0;else royalty = Math.round(royaltyBaseSales * (num(cfg === null || cfg === void 0 ? void 0 : cfg.royaltyRate) / 100));
+  if ((cfg === null || cfg === void 0 ? void 0 : cfg.royaltyType) === "fixed") royalty = useUnitPriceRule && royaltyBaseSales <= 0 ? 0 : num(cfg.royaltyFixed);else if ((cfg === null || cfg === void 0 ? void 0 : cfg.royaltyType) === "none") royalty = 0;else royalty = Math.round(royaltyBaseSales * (num(cfg === null || cfg === void 0 ? void 0 : cfg.royaltyRate) / 100));
 
   // 稼働がゼロの月は定額控除もロイヤリティも発生させない
   var hasWork = workDays > 0;
@@ -2820,12 +2940,20 @@ var calcPayout = function calcPayout(driver, records) {
   // ハコログ側の計算にこれが入っていないと、ドライバーが見る「振込予定額」と
   // 実際に振り込まれる額が食い違い、問い合わせ・不信感の原因になる。
   // 必ずハコマネ側（calcDriverPayout）と同じ計算にすること。
-  var payTaxIncluded = !!(driver && driver.invoiceRegistered && driver.payTaxIncluded);
+  // 【検証9回目で修正】締めた月は、締めた時点の消費税の設定（スナップショット）で計算する（ハコマネと同じ）。
+  // 以前は今の設定を使っていたため、締めた後にインボイス登録の有無や「消費税を上乗せして支払う」設定を
+  // 変えると、過去の月の振込予定額だけがハコマネ（実際の振込額）と食い違っていた。
+  var taxCfg = snapshot && snapshot.payTaxIncluded !== undefined ? snapshot : driver;
+  var payTaxIncluded = !!(taxCfg && taxCfg.invoiceRegistered && taxCfg.payTaxIncluded);
   // 【重要】消費税率は1箇所で定義する。ハコマネ側の TAX_RATE と必ず同じ値にすること。
   // ここだけ違う値になると、ドライバーが見る振込予定額と、
   // 会社が実際に振り込む額が食い違う。
   var HAKOLOG_TAX_RATE = 0.1;
-  var consumptionTax = payTaxIncluded ? Math.round(grossPay * HAKOLOG_TAX_RATE) : 0;
+  // 【利用者の決定で変更】高速代・駐車場代（立替金）には消費税を上乗せしない（ハコマネと同じ）。
+  // この決まりより前に締めた月（スナップショットに taxRule が無い）は、締めた時点の計算のまま。
+  var useReimbTaxRule = !snapshot || Number(snapshot.taxRule) >= 2;
+  var taxExemptReimbursement = useReimbTaxRule ? highway + parking : 0;
+  var consumptionTax = payTaxIncluded ? Math.round((grossPay - taxExemptReimbursement) * HAKOLOG_TAX_RATE) : 0;
   var netPay = Math.round(grossPay + consumptionTax - totalDeduction);
   return {
     workDays: workDays,
@@ -2839,7 +2967,13 @@ var calcPayout = function calcPayout(driver, records) {
     otherAllowance: Math.round(otherAllowance),
     grossPay: Math.round(grossPay),
     consumptionTax: consumptionTax,
+    taxExemptReimbursement: Math.round(taxExemptReimbursement),
     royalty: Math.round(royalty),
+    // 【検証（ハコログ2回目）で追加】ロイヤリティの根拠（ハコマネの明細と同じ表示にする）と、その他控除の名目
+    royaltyTypeUsed: (cfg === null || cfg === void 0 ? void 0 : cfg.royaltyType) || "rate",
+    royaltyRateUsed: cfg === null || cfg === void 0 ? void 0 : cfg.royaltyRate,
+    royaltyBaseSales: Math.round(royaltyBaseSales),
+    otherDeductionNoteUsed: (cfg === null || cfg === void 0 ? void 0 : cfg.otherDeductionNote) || "",
     lease: Math.round(lease),
     insurance: Math.round(insurance),
     uniform: Math.round(uniform),
@@ -2862,6 +2996,12 @@ var calcPayout = function calcPayout(driver, records) {
     submittedCount: all.filter(function (r) {
       return r.approvalStatus === APPROVAL.SUBMITTED;
     }).length,
+    // 【検証7回目で修正】「承認待ち」は申請済み（submitted）だけ。下書きは別枠で案内しているので二重に数えない。
+    submittedAmount: Math.round(all.filter(function (r) {
+      return r.approvalStatus === APPROVAL.SUBMITTED;
+    }).reduce(function (s, r) {
+      return s + num(r.driverAmount);
+    }, 0)),
     allRecords: all
   };
 };
@@ -2973,22 +3113,38 @@ var Confirm = function Confirm(_ref5) {
   }, "\u30AD\u30E3\u30F3\u30BB\u30EB"))));
 };
 
+/** 全角数字（日本語入力のまま打った数字）を半角にしてから、数字以外を取り除く */
+var digitsOnly = function digitsOnly(v) {
+  var t = String(v == null ? "" : v);
+  try { t = t.normalize("NFKC"); } catch (_e) {}
+  return t.replace(/[^0-9]/g, "");
+};
 /** 数字入力。配送中の片手操作を想定し、数字キーパッドを強制表示する */
 var NumInput = function NumInput(_ref6) {
   var value = _ref6.value,
     _onChange = _ref6.onChange,
     placeholder = _ref6.placeholder,
     suffix = _ref6.suffix,
-    big = _ref6.big;
+    big = _ref6.big,
+    decimal = _ref6.decimal;
   return /*#__PURE__*/React.createElement("div", {
     className: "relative"
   }, /*#__PURE__*/React.createElement("input", {
     type: "text",
-    inputMode: "numeric",
-    pattern: "[0-9]*",
+    inputMode: decimal ? "decimal" : "numeric",
+    pattern: decimal ? "[0-9.]*" : "[0-9]*",
     value: value !== null && value !== void 0 ? value : "",
     onChange: function onChange(e) {
-      return _onChange(e.target.value.replace(/[^0-9.]/g, ""));
+      // 全角数字（日本語入力のまま打った場合）も半角に直して受け付ける。
+      // 個数・金額は整数のみ、距離・時間だけ小数点を1つまで許可する。
+      var raw = String(e.target.value || "");
+      try { raw = raw.normalize("NFKC"); } catch (_e) {}
+      raw = raw.replace(/[\u3002\uFF0E]/g, ".");
+      if (!decimal) return _onChange(raw.split(".")[0].replace(/[^0-9]/g, ""));
+      var cleaned = raw.replace(/[^0-9.]/g, "");
+      var dot = cleaned.indexOf(".");
+      if (dot >= 0) cleaned = cleaned.slice(0, dot + 1) + cleaned.slice(dot + 1).replace(/\./g, "");
+      return _onChange(cleaned);
     },
     placeholder: placeholder || "0",
     className: "w-full border-2 border-gray-200 rounded-xl px-4 ".concat(big ? "py-4 text-2xl font-bold" : "py-3 text-base", " text-right focus:outline-none focus:border-teal-500 bg-white"),
@@ -3292,7 +3448,7 @@ function VehicleCheckItem(_ref10) {
     onClick: function onClick() {
       return onChange(value === "ok" ? null : "ok");
     },
-    className: "py-2 rounded-lg text-sm font-medium ".concat(value === "ok" ? "bg-teal-500 text-white" : "bg-gray-100 text-gray-400")
+    className: "py-2 rounded-lg text-sm font-medium ".concat(value === "ok" ? "bg-teal-500 text-white" : "bg-gray-100 text-gray-500")
   }, "\u826F")));
 }
 
@@ -3559,7 +3715,7 @@ function PreCheckSheet(_ref11) {
             return _objectSpread(_objectSpread({}, p), {}, _defineProperty({}, i, "ok"));
           });
         },
-        className: "py-2 rounded-lg text-sm font-medium ".concat(healthVals[i] === "ok" ? "bg-teal-500 text-white" : "bg-gray-100 text-gray-400")
+        className: "py-2 rounded-lg text-sm font-medium ".concat(healthVals[i] === "ok" ? "bg-teal-500 text-white" : "bg-gray-100 text-gray-500")
       }, "\u826F")));
     })),
     // 【機能追加・法令調査で発見】アルコール検知器を使用したかどうかは、
@@ -3576,7 +3732,7 @@ function PreCheckSheet(_ref11) {
       className: "py-2 rounded-lg text-sm font-medium ".concat(alcoholDetectorUsed === false ? "bg-gray-400 text-white" : "bg-gray-100 text-gray-500")
     }, "\u4F7F\u7528\u3057\u3066\u3044\u306A\u3044"), /*#__PURE__*/React.createElement("button", {
       onClick: function onClick() { return setAlcoholDetectorUsed(true); },
-      className: "py-2 rounded-lg text-sm font-medium ".concat(alcoholDetectorUsed === true ? "bg-teal-500 text-white" : "bg-gray-100 text-gray-400")
+      className: "py-2 rounded-lg text-sm font-medium ".concat(alcoholDetectorUsed === true ? "bg-teal-500 text-white" : "bg-gray-100 text-gray-500")
     }, "\u4F7F\u7528\u3057\u305F"))), alcoholDetected && /*#__PURE__*/React.createElement("div", {
       className: "mt-2 bg-red-50 border-2 border-red-300 rounded-xl px-4 py-3"
     }, /*#__PURE__*/React.createElement("p", {
@@ -3680,7 +3836,7 @@ function PreCheckSheet(_ref11) {
       onClick: function onClick() {
         return setPrevAbnormal("ok");
       },
-      className: "py-2 rounded-lg text-sm font-medium ".concat(prevAbnormal === "ok" ? "bg-teal-500 text-white" : "bg-gray-100 text-gray-400")
+      className: "py-2 rounded-lg text-sm font-medium ".concat(prevAbnormal === "ok" ? "bg-teal-500 text-white" : "bg-gray-100 text-gray-500")
     }, "\u826F")), prevAbnormal === "repair" && /*#__PURE__*/React.createElement("textarea", {
       value: prevNote,
       onChange: function onChange(e) {
@@ -4107,11 +4263,12 @@ function HomeScreen(_ref12) {
   });
 
   // ドライバーには「自分の報酬」を見せる。会社の売上は見せない。
+  // 差し戻しの実績は報酬にならないので、今日の合計から外す（実績画面・報酬画面と同じ）
   var todayPay = todayRecs.reduce(function (s, r) {
-    return s + num(r.driverAmount);
+    return r.approvalStatus === APPROVAL.REJECTED ? s : s + num(r.driverAmount);
   }, 0);
   var todayCount = todayRecs.reduce(function (s, r) {
-    return s + num(r.count);
+    return r.approvalStatus === APPROVAL.REJECTED ? s : s + recordParcelCount(r);
   }, 0);
   var payout = useMemo(function () {
     var _company$monthSnapsho;
@@ -4421,7 +4578,7 @@ function EntrySheet(_ref14) {
   var matchedRoute = routes.find(function (r) {
     return r.jobTypeId === form.jobTypeId;
   });
-  var dekaRates = isDeka ? (matchedRoute && Array.isArray(matchedRoute.dekaRates) ? matchedRoute.dekaRates : Array.isArray(jt === null || jt === void 0 ? void 0 : jt.dekaRates) ? jt.dekaRates : []) : null;
+  var dekaRates = isDeka ? mergeDekaRates(matchedRoute && matchedRoute.dekaRates, jt === null || jt === void 0 ? void 0 : jt.dekaRates) : null;
   var amounts = calcRecordAmounts(form, jt, dekaRates, matchedRoute);
 
   /**
@@ -4477,6 +4634,19 @@ function EntrySheet(_ref14) {
             // 小数チェックを行う）。
             if (pattern === "count" && form.count !== "" && !Number.isInteger(num(form.count))) {
               if (!window.confirm("配送個数「".concat(form.count, "」に小数が含まれています。個数として正しいですか？"))) {
+                return _context12.a(2);
+              }
+            }
+            // 数量を入れ忘れたまま申請すると、¥0の実績が会社に届いてしまう。
+            if (mode === "submit" && num(amounts.salesAmount) === 0 && num(amounts.driverAmount) === 0) {
+              if (!window.confirm(pattern === "fixed" ? "この仕事の報酬額が設定されていないため、報酬が ¥0 になっています。\n（チャーター報酬の欄に金額を入れるか、会社にご確認ください）\nこのまま申請しますか？" : "".concat(isDeka ? "サイズ別の個数" : qtyLabel, "が入力されていないため、報酬が ¥0 になっています。\nこのまま申請しますか？"))) {
+                return _context12.a(2);
+              }
+            }
+            // 【検証（ハコログ2回目）で追加】チャーター報酬・高速代などの金額欄は、0の打ち過ぎを確認する仕組みが無かった。
+            // 1件の報酬が10万円以上になる場合は、その場で確認する（軽貨物の1日の報酬としては通常ありえない額）。
+            if (num(amounts.driverAmount) >= 100000) {
+              if (!window.confirm("この実績1件の報酬が ".concat(yen(amounts.driverAmount), " になっています。\n金額の0の数など、入力ミスではありませんか？このまま保存しますか？"))) {
                 return _context12.a(2);
               }
             }
@@ -4539,7 +4709,7 @@ function EntrySheet(_ref14) {
     onChange: function onChange(e) {
       return f("date", e.target.value);
     },
-    className: "w-full min-w-0 max-w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-base focus:outline-none focus:border-teal-500",
+    className: "w-full min-w-0 max-w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-base bg-white focus:outline-none focus:border-teal-500",
     style: { boxSizing: "border-box" }
   })), /*#__PURE__*/React.createElement(Field, {
     label: "\u6848\u4EF6\uFF08\u9867\u5BA2\uFF09"
@@ -4577,7 +4747,7 @@ function EntrySheet(_ref14) {
     className: "text-xs font-bold text-amber-800"
   }, "\u540C\u3058\u65E5\u30FB\u540C\u3058\u6848\u4EF6\u306E\u5B9F\u7E3E\u304C\u3001\u65E2\u306B", duplicateCount, "\u4EF6\u3042\u308A\u307E\u3059"), /*#__PURE__*/React.createElement("p", {
     className: "text-[11px] text-amber-600 mt-1 leading-relaxed"
-  }, "\u540C\u3058\u65E5\u306B\u540C\u3058\u5BA2\u5148\u3078\u8907\u6570\u56DE\u914D\u9001\u3057\u305F\u5834\u5408\u306F\u305D\u306E\u307E\u307E\u767B\u9332\u3057\u3066\u554F\u984C\u3042\u308A\u307E\u305B\u3093\u3002 \u5165\u529B\u3057\u5FD8\u308C\u3066\u91CD\u8907\u3057\u3066\u3057\u307E\u3063\u305F\u5834\u5408\u306F\u3001\u58F2\u4E0A\u4E00\u89A7\u304B\u3089\u53E4\u3044\u65B9\u3092\u3054\u78BA\u8A8D\u304F\u3060\u3055\u3044\u3002")),
+  }, "\u540C\u3058\u65E5\u306B\u540C\u3058\u5BA2\u5148\u3078\u8907\u6570\u56DE\u914D\u9001\u3057\u305F\u5834\u5408\u306F\u305D\u306E\u307E\u307E\u767B\u9332\u3057\u3066\u554F\u984C\u3042\u308A\u307E\u305B\u3093\u3002 \u5165\u529B\u3057\u5FD8\u308C\u3066\u91CD\u8907\u3057\u3066\u3057\u307E\u3063\u305F\u5834\u5408\u306F\u3001\u5B9F\u7E3E\u4E00\u89A7\u304B\u3089\u53E4\u3044\u65B9\u3092\u3054\u78BA\u8A8D\u304F\u3060\u3055\u3044\u3002")),
   // 【機能追加】デカ宅：サイズごとに単価が違うため、通常の数量入力欄の
   // 代わりに、サイズ別の個数入力欄を並べる。各サイズの単価も、
   // 迷わないようその場に表示する。
@@ -4615,6 +4785,7 @@ function EntrySheet(_ref14) {
   }, /*#__PURE__*/React.createElement(NumInput, {
     big: true,
     value: form[qtyKey],
+    decimal: pattern === "distance" || pattern === "time",
     onChange: function onChange(v) {
       return f(qtyKey, v);
     },
@@ -4748,7 +4919,7 @@ function EntrySheet(_ref14) {
     }, /*#__PURE__*/React.createElement("span", null, rate.size, " ", qty.toLocaleString(), "\u500B \xD7 ", yen(unitDriverPrice)), /*#__PURE__*/React.createElement("span", null, yen(Math.round(qty * unitDriverPrice))));
   }) : /*#__PURE__*/React.createElement("div", {
     className: "flex justify-between"
-  }, /*#__PURE__*/React.createElement("span", null, qtyLabel, " ", num(form[qtyKey]).toLocaleString(), qtySuffix, " \xD7 ", yen(effDriverUnit)), /*#__PURE__*/React.createElement("span", null, yen(Math.round(num(form[qtyKey]) * effDriverUnit)))), num(form.charterDriver) > 0 && /*#__PURE__*/React.createElement("div", {
+  }, pattern === "fixed" ? /*#__PURE__*/React.createElement("span", null, "固定報酬（一律）") : /*#__PURE__*/React.createElement("span", null, qtyLabel, " ", num(form[qtyKey]).toLocaleString(), qtySuffix, " \xD7 ", yen(effDriverUnit)), /*#__PURE__*/React.createElement("span", null, pattern === "fixed" ? yen(effDriverUnit) : yen(Math.round(Math.round(num(form[qtyKey]) * effDriverUnit * 1000) / 1000)))), num(form.charterDriver) > 0 && /*#__PURE__*/React.createElement("div", {
     className: "flex justify-between"
   }, /*#__PURE__*/React.createElement("span", null, "\u30C1\u30E3\u30FC\u30BF\u30FC"), /*#__PURE__*/React.createElement("span", null, yen(form.charterDriver))), num(form.highwayFee) > 0 && /*#__PURE__*/React.createElement("div", {
     className: "flex justify-between"
@@ -4828,9 +4999,11 @@ function SalesScreen(_ref16) {
   var thisYear = String(now.getFullYear());
 
   // ドライバーには自分の報酬額を見せる。会社の売上は見せない。
+  // 【検証9回目で修正】差し戻された実績も合計に入っていたため、「今月」の金額が報酬画面より
+  // 差し戻し分だけ多く見えていた。差し戻しは報酬にならないので合計から外す（一覧には表示したまま）。
   var sum = function sum(list) {
     return list.reduce(function (s, r) {
-      return s + num(r.driverAmount);
+      return r.approvalStatus === APPROVAL.REJECTED ? s : s + num(r.driverAmount);
     }, 0);
   };
   var todayR = records.filter(function (r) {
@@ -4900,11 +5073,13 @@ function SalesScreen(_ref16) {
       value = _ref17.value,
       active = _ref17.active;
     return /*#__PURE__*/React.createElement("div", {
-      className: "flex-1 rounded-xl px-3 py-2.5 border-2 ".concat(active ? "border-teal-500 bg-teal-50" : "border-gray-200 bg-white")
+      className: "flex-1 min-w-0 rounded-xl px-2 py-2.5 border-2 ".concat(active ? "border-teal-500 bg-teal-50" : "border-gray-200 bg-white")
     }, /*#__PURE__*/React.createElement("p", {
       className: "text-[10px] text-gray-400 mb-0.5"
     }, label), /*#__PURE__*/React.createElement("p", {
-      className: "text-base font-black ".concat(active ? "text-teal-700" : "text-gray-800")
+      // 【検証（ハコログ2回目）で修正】幅320pxの端末で「9.4 / 万」のように単位だけ改行されていた。折り返さず、幅に合わせて文字を小さくする。
+      className: "font-black whitespace-nowrap ".concat(active ? "text-teal-700" : "text-gray-800"),
+      style: { fontSize: "clamp(11px, 3.6vw, 16px)" }
     }, yenShort(value)));
   };
   return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(ScreenHeader, {
@@ -4962,7 +5137,9 @@ function SalesScreen(_ref16) {
     var jt = jobTypes.find(function (j) {
       return j.id === r.jobTypeId;
     });
-    var st = r.approvalStatus;
+    // 【検証9回目で修正】会社側（ハコマネ）で入力された実績は承認状態が空で、承認済みとして報酬に入るのに、
+    // 一覧では状態が何も表示されていなかった。報酬の計算と同じく「承認済み」と表示する。
+    var st = r.approvalStatus || APPROVAL.APPROVED;
     var sty = APPROVAL_STYLES[st];
     return /*#__PURE__*/React.createElement("div", {
       key: r.id || i,
@@ -4994,7 +5171,7 @@ function SalesScreen(_ref16) {
       className: "text-[10px] font-bold px-1.5 py-0.5 rounded ".concat(sty.bg, " ").concat(sty.fg)
     }, APPROVAL_LABELS[st])), /*#__PURE__*/React.createElement("p", {
       className: "text-[11px] text-gray-400 truncate"
-    }, (jt === null || jt === void 0 ? void 0 : jt.name) || "配送", " / ", num(r.count), "\u500B", r.note ? " \xB7 ".concat(r.note) : "")), /*#__PURE__*/React.createElement("div", {
+    }, (jt === null || jt === void 0 ? void 0 : jt.name) || "配送", recordQtyLabel(r) ? " / " + recordQtyLabel(r) : "", r.note ? " \xB7 ".concat(r.note) : "")), /*#__PURE__*/React.createElement("div", {
       className: "text-right flex-shrink-0 ml-2"
     }, /*#__PURE__*/React.createElement("p", {
       className: "text-base font-black ".concat(isApprovedRecord(r) ? "text-teal-600" : "text-gray-400")
@@ -5005,6 +5182,11 @@ function SalesScreen(_ref16) {
 }
 
 /* ---------- 報酬（概算・リアルタイム） ---------- */
+// 【検証7回目で追加】パート・正社員は給与で精算するため振込対象外（ハコマネ側の扱いに合わせる）
+var isEmployeeProfile = function isEmployeeProfile(profile) {
+  var ct = String((profile === null || profile === void 0 ? void 0 : profile.contractType) || "");
+  return ct === "パート" || ct === "正社員" || ct === "アルバイト";
+};
 function PayoutScreen(_ref20) {
   var profile = _ref20.profile,
     records = _ref20.records,
@@ -5086,9 +5268,16 @@ function PayoutScreen(_ref20) {
         }[c];
       });
     };
-    var html = "<!DOCTYPE html><html lang=\"ja\"><head><meta charset=\"utf-8\"><title>\u8ACB\u6C42\u66F8 ".concat(esc(monthInvoice.id), "</title>\n<style>*{box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,'Hiragino Sans','Noto Sans JP',sans-serif;color:#222;margin:0;padding:20px;background:#f5f5f5}\n.sheet{max-width:640px;margin:0 auto;background:#fff;padding:32px;border-radius:6px}\n.bar{max-width:640px;margin:0 auto 12px;text-align:right}\n.bar button{padding:8px 18px;font-size:13px;font-weight:700;color:#fff;background:#14b8a6;border:none;border-radius:4px;cursor:pointer;font-family:inherit}\nh1{font-size:20px;text-align:center;letter-spacing:4px;margin:0 0 20px}\n.row{display:flex;justify-content:space-between;margin-bottom:20px;font-size:13px;line-height:1.8}\ntable{width:100%;border-collapse:collapse;margin:16px 0}th,td{border:1px solid #ddd;padding:8px 10px;font-size:13px}\nth{background:#f5f5f5;text-align:left}\n.totals{margin-left:auto;width:260px;font-size:13px}.totals div{display:flex;justify-content:space-between;padding:4px 0}\n.totals .grand{font-size:17px;font-weight:700;border-top:2px solid #222;margin-top:6px;padding-top:8px}\n.foot{margin-top:24px;text-align:center;font-size:11px;color:#999}\n@page{ size: A4; margin: 12mm; }\n@media print{body{background:#fff;padding:0}.bar{display:none}.sheet{max-width:100%;width:100%;padding:0;border-radius:0}}\n</style></head>\n<body>\n<div class=\"bar\"><button onclick=\"window.print()\">\u5370\u5237 / PDF\u4FDD\u5B58</button></div>\n<div class=\"sheet\">\n  <h1>\u8ACB \u6C42 \u66F8</h1>\n  <div class=\"row\">\n    <div>").concat(esc(monthInvoice.driverName), "<br/>").concat(monthInvoice.registered && monthInvoice.invoiceRegNo ? "\u767B\u9332\u756A\u53F7\uFF1A".concat(esc(monthInvoice.invoiceRegNo)) : "（適格請求書発行事業者登録なし）", "</div>\n    <div>\u8ACB\u6C42\u66F8\u756A\u53F7\uFF1A").concat(esc(monthInvoice.id), "<br/>\u767A\u884C\u65E5\uFF1A").concat(esc(monthInvoice.issueDate), "<br/>\u304A\u652F\u6255\u671F\u9650\uFF1A").concat(esc(monthInvoice.dueDate), "</div>\n  </div>\n  <table><thead><tr><th>\u5185\u5BB9</th><th style=\"text-align:right\">\u91D1\u984D</th></tr></thead><tbody>\n    ").concat((monthInvoice.lineItems || []).map(function (i) {
-      return "<tr><td>".concat(esc(i.name), "</td><td style=\"text-align:right\">").concat(yen(i.subtotal), "</td></tr>");
-    }).join(""), "\n  </tbody></table>\n  <div class=\"totals\">\n    <div><span>\u5C0F\u8A08</span><span>").concat(yen(monthInvoice.amount), "</span></div>\n    ").concat(monthInvoice.registered ? "<div><span>\u6D88\u8CBB\u7A0E\uFF0810%\uFF09</span><span>".concat(yen(monthInvoice.tax), "</span></div>") : "<div style=\"color:#999\"><span>\u6D88\u8CBB\u7A0E</span><span>\u5BFE\u8C61\u5916</span></div>", "\n    <div class=\"grand\"><span>\u3054\u8ACB\u6C42\u984D</span><span>").concat(yen(monthInvoice.total), "</span></div>\n  </div>\n  <div class=\"foot\">\u652F\u6255\u72B6\u6CC1\uFF1A").concat((monthInvoice.status === "paid" ? "支払済み" : monthInvoice.status === "partial" ? "一部支払済み（残 " + yen((Number(monthInvoice.total)||0) - (Number(monthInvoice.paidAmount)||0)) + "）" : "未払い"), "</div>\n</div></body></html>");
+    var html = "<!DOCTYPE html><html lang=\"ja\"><head><meta charset=\"utf-8\"><title>\u8ACB\u6C42\u66F8 ".concat(esc(monthInvoice.id), "</title>\n<style>*{box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,'Hiragino Sans','Noto Sans JP',sans-serif;color:#222;margin:0;padding:20px;background:#f5f5f5}\n.sheet{max-width:640px;margin:0 auto;background:#fff;padding:32px;border-radius:6px}\n.bar{max-width:640px;margin:0 auto 12px;text-align:right}\n.bar button{padding:8px 18px;font-size:13px;font-weight:700;color:#fff;background:#14b8a6;border:none;border-radius:4px;cursor:pointer;font-family:inherit}\nh1{font-size:20px;text-align:center;letter-spacing:4px;margin:0 0 20px}\n.row{display:flex;justify-content:space-between;margin-bottom:20px;font-size:13px;line-height:1.8}\ntable{width:100%;border-collapse:collapse;margin:16px 0}th,td{border:1px solid #ddd;padding:8px 10px;font-size:13px}\nth{background:#f5f5f5;text-align:left}\n.totals{margin-left:auto;width:260px;font-size:13px}.totals div{display:flex;justify-content:space-between;padding:4px 0}\n.totals .grand{font-size:17px;font-weight:700;border-top:2px solid #222;margin-top:6px;padding-top:8px}\n.foot{margin-top:24px;text-align:center;font-size:11px;color:#999}\n@page{ size: A4; margin: 12mm; }\n@media print{body{background:#fff;padding:0}.bar{display:none}.sheet{max-width:100%;width:100%;padding:0;border-radius:0}}\n</style></head>\n<body>\n<div class=\"bar\"><button onclick=\"window.print()\">\u5370\u5237 / PDF\u4FDD\u5B58</button></div>\n<div class=\"sheet\">\n  <h1>\u8ACB \u6C42 \u66F8</h1>\n  ").concat(company && company.name ? "<div style=\"font-size:17px;font-weight:700;border-bottom:1px solid #222;display:inline-block;padding:0 24px 2px 0;margin-bottom:14px\">" + esc(company.name) + " 御中</div>" : "", "\n  <div class=\"row\">\n    <div>").concat(esc(monthInvoice.driverName), "<br/>").concat(monthInvoice.registered ? (monthInvoice.invoiceRegNo ? "\u767B\u9332\u756A\u53F7\uFF1A".concat(esc(monthInvoice.invoiceRegNo)) : "登録番号：未設定（会社にご確認ください）") : "（適格請求書発行事業者登録なし）", "</div>\n    <div>\u8ACB\u6C42\u66F8\u756A\u53F7\uFF1A").concat(esc(monthInvoice.id), "<br/>\u767A\u884C\u65E5\uFF1A").concat(esc(monthInvoice.issueDate), "<br/>\u304A\u652F\u6255\u671F\u9650\uFF1A").concat(esc(monthInvoice.dueDate), "</div>\n  </div>\n  <table><thead><tr><th>\u5185\u5BB9</th><th style=\"text-align:right\">\u91D1\u984D</th></tr></thead><tbody>\n    ").concat((monthInvoice.lineItems || []).map(function (i) {
+      return "<tr><td>".concat(esc(i.name), i.taxable === false ? "（非課税）" : "", "</td><td style=\"text-align:right\">").concat(yen(i.subtotal), "</td></tr>");
+    }).join(""), "\n  </tbody></table>\n  <div class=\"totals\">\n    <div><span>\u5C0F\u8A08</span><span>").concat(yen(monthInvoice.amount), "</span></div>\n    ").concat(function () {
+      // 立替金（非課税）がある場合は、インボイスの記載事項として税率ごとの対象額を分けて示す
+      var items = monthInvoice.lineItems || [];
+      var exempt = items.filter(function (i) { return i.taxable === false; }).reduce(function (a, i) { return a + (Number(i.subtotal) || 0); }, 0);
+      if (!exempt) return "";
+      var taxable = (Number(monthInvoice.amount) || 0) - exempt;
+      return "<div style=\"color:#666\"><span>10%対象</span><span>" + yen(taxable) + "</span></div><div style=\"color:#666\"><span>非課税（立替金）</span><span>" + yen(exempt) + "</span></div>";
+    }(), monthInvoice.registered ? "<div><span>\u6D88\u8CBB\u7A0E\uFF0810%\uFF09</span><span>".concat(yen(monthInvoice.tax), "</span></div>") : "<div style=\"color:#999\"><span>\u6D88\u8CBB\u7A0E</span><span>\u5BFE\u8C61\u5916</span></div>", "\n    <div class=\"grand\"><span>\u3054\u8ACB\u6C42\u984D</span><span>").concat(yen(monthInvoice.total), "</span></div>\n  </div>\n  <div class=\"foot\">\u652F\u6255\u72B6\u6CC1\uFF1A").concat((monthInvoice.status === "paid" ? "支払済み" : monthInvoice.status === "partial" ? "一部支払済み（残 " + yen((Number(monthInvoice.total)||0) - (Number(monthInvoice.paidAmount)||0)) + "）" : "未払い"), "</div>\n</div></body></html>");
     var w = window.open("", "_blank");
     if (!w) {
       alert("ポップアップがブロックされました。ブラウザの設定で許可してください。");
@@ -5116,7 +5305,7 @@ function PayoutScreen(_ref20) {
       v = _ref24[1];
     return v !== 0;
   });
-  var dedRows = [["ロイヤリティ", p.royalty], ["車両リース", p.lease], ["保険料", p.insurance], ["制服代", p.uniform], ["備品代", p.supplies], [(profile === null || profile === void 0 ? void 0 : profile.otherDeductionNote) || "その他控除", p.otherDeduction]].filter(function (_ref25) {
+  var dedRows = [[royaltyLabelOf(p), p.royalty], ["車両リース", p.lease], ["保険料", p.insurance], ["制服代", p.uniform], ["備品代", p.supplies], [p.otherDeductionNoteUsed || (profile === null || profile === void 0 ? void 0 : profile.otherDeductionNote) || "その他控除", p.otherDeduction]].filter(function (_ref25) {
     var _ref26 = _slicedToArray(_ref25, 2),
       v = _ref26[1];
     return v !== 0;
@@ -5183,21 +5372,21 @@ function PayoutScreen(_ref20) {
     className: "text-gray-900 text-5xl font-black leading-none"
   }, yen(p.grossPay)), /*#__PURE__*/React.createElement("p", {
     className: "text-gray-400 text-xs mt-2"
-  }, "\u7A3C\u50CD", p.workDays, "\u65E5 / ", p.totalCount.toLocaleString(), "\u500B")), p.pendingCount > 0 && /*#__PURE__*/React.createElement("div", {
+  }, "\u7A3C\u50CD", p.workDays, "\u65E5 / ", p.totalCount.toLocaleString(), "\u500B")), p.submittedCount > 0 && /*#__PURE__*/React.createElement("div", {
     className: "bg-amber-50 border-t-2 border-amber-200 px-4 py-3 flex items-center justify-between"
   }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("p", {
     className: "text-xs font-bold text-amber-800"
-  }, "\u627F\u8A8D\u5F85\u3061 ", p.pendingCount, "\u4EF6"), /*#__PURE__*/React.createElement("p", {
+  }, "\u627F\u8A8D\u5F85\u3061 ", p.submittedCount, "\u4EF6"), /*#__PURE__*/React.createElement("p", {
     className: "text-[11px] text-amber-600 mt-0.5"
   }, "\u627F\u8A8D\u3055\u308C\u308B\u3068\u4E0A\u306E\u91D1\u984D\u306B\u52A0\u7B97\u3055\u308C\u307E\u3059")), /*#__PURE__*/React.createElement("p", {
     className: "text-lg font-black text-amber-700"
-  }, yen(p.pendingAmount))), p.rejectedCount > 0 && /*#__PURE__*/React.createElement("div", {
+  }, yen(p.submittedAmount))), p.rejectedCount > 0 && /*#__PURE__*/React.createElement("div", {
     className: "bg-red-50 border-t-2 border-red-200 px-4 py-3"
   }, /*#__PURE__*/React.createElement("p", {
     className: "text-xs font-bold text-red-700"
   }, "\u5DEE\u3057\u623B\u3055\u308C\u305F\u5B9F\u7E3E\u304C ", p.rejectedCount, "\u4EF6 \u3042\u308A\u307E\u3059"), /*#__PURE__*/React.createElement("p", {
     className: "text-[11px] text-red-600 mt-0.5"
-  }, "\u58F2\u4E0A\u753B\u9762\u304B\u3089\u4FEE\u6B63\u3057\u3066\u3001\u518D\u7533\u8ACB\u3057\u3066\u304F\u3060\u3055\u3044\u3002")), p.draftCount > 0 && /*#__PURE__*/React.createElement("div", {
+  }, "\u5B9F\u7E3E\u753B\u9762\u304B\u3089\u4FEE\u6B63\u3057\u3066\u3001\u518D\u7533\u8ACB\u3057\u3066\u304F\u3060\u3055\u3044\u3002")), p.draftCount > 0 && /*#__PURE__*/React.createElement("div", {
     className: "bg-gray-50 border-t border-gray-200 px-4 py-2.5"
   }, /*#__PURE__*/React.createElement("p", {
     className: "text-[11px] text-gray-500"
@@ -5209,11 +5398,16 @@ function PayoutScreen(_ref20) {
     className: "flex items-center justify-between mb-1"
   }, /*#__PURE__*/React.createElement("span", {
     className: "text-xs font-bold text-gray-600"
-  }, "\u632F\u8FBC\u4E88\u5B9A\u984D"), /*#__PURE__*/React.createElement("span", {
+  }, isEmployeeProfile(profile) ? "支払額（給与で精算・振込対象外）" : "\u632F\u8FBC\u4E88\u5B9A\u984D"), /*#__PURE__*/React.createElement("span", {
     className: "text-2xl font-black ".concat(p.isNegative ? "text-gray-400" : "text-gray-900")
-  }, p.isNegative ? yen(0) : yen(p.netPay))), p.isNegative && /*#__PURE__*/React.createElement("p", {
+  }, p.isNegative ? yen(0) : yen(p.netPay))), /*#__PURE__*/React.createElement("p", {
+    className: "text-[11px] text-gray-400 text-right"
+  }, "支給合計 ", yen(p.grossPay), p.consumptionTax > 0 ? " ＋ 消費税 " + yen(p.consumptionTax) : "", " − 控除合計 ", yen(p.totalDeduction)), p.isNegative && /*#__PURE__*/React.createElement("p", {
     className: "text-[11px] text-gray-500 mt-2 leading-relaxed bg-gray-50 rounded-lg px-3 py-2"
-  }, "\u30EA\u30FC\u30B9\u6599\u306A\u3069\u306E\u56FA\u5B9A\u8CBB\u306F\u6708\u521D\u306B\u307E\u3068\u3081\u3066\u8A08\u4E0A\u3055\u308C\u308B\u305F\u3081\u3001\u6708\u306E\u524D\u534A\u306F\u30DE\u30A4\u30CA\u30B9\u306B\u306A\u308A\u307E\u3059\u3002 \u7A3C\u50CD\u304C\u9032\u3080\u3068\u30D7\u30E9\u30B9\u306B\u8EE2\u3058\u307E\u3059\u3002"))), /*#__PURE__*/React.createElement(Card, {
+  }, isCurrent
+    ? "\u30EA\u30FC\u30B9\u6599\u306A\u3069\u306E\u56FA\u5B9A\u8CBB\u306F\u6708\u521D\u306B\u307E\u3068\u3081\u3066\u8A08\u4E0A\u3055\u308C\u308B\u305F\u3081\u3001\u6708\u306E\u524D\u534A\u306F\u30DE\u30A4\u30CA\u30B9\u306B\u306A\u308A\u307E\u3059\u3002 \u7A3C\u50CD\u304C\u9032\u3080\u3068\u30D7\u30E9\u30B9\u306B\u8EE2\u3058\u307E\u3059\u3002" + "（現時点では " + yen(Math.abs(p.netPay)) + " の不足）"
+    // 【検証8回目で修正】過ぎた月にも「稼働が進むとプラスに転じます」と出ていた。過去の月は不足額と相談先を案内する。
+    : "控除が支給を上回ったため、この月の振込はありません（不足 " + yen(Math.abs(p.netPay)) + "）。精算方法は会社にご確認ください。"))), /*#__PURE__*/React.createElement(Card, {
     className: "overflow-hidden"
   }, /*#__PURE__*/React.createElement("div", {
     className: "px-4 py-2 bg-orange-50 border-b border-orange-100"
@@ -5236,7 +5430,10 @@ function PayoutScreen(_ref20) {
     className: "text-sm font-black text-orange-700"
   }, "\u652F\u7D66\u5408\u8A08"), /*#__PURE__*/React.createElement("span", {
     className: "text-lg font-black text-orange-700"
-  }, yen(p.grossPay)))), /*#__PURE__*/React.createElement(Card, {
+  }, yen(p.grossPay))), p.consumptionTax > 0 && /*#__PURE__*/React.createElement(Row, {
+    label: p.taxExemptReimbursement > 0 ? "消費税（10%・立替金を除く）" : "\u6D88\u8CBB\u7A0E\uFF0810%\uFF09",
+    value: p.consumptionTax
+  })), /*#__PURE__*/React.createElement(Card, {
     className: "overflow-hidden"
   }, /*#__PURE__*/React.createElement("div", {
     className: "px-4 py-2 bg-purple-50 border-b border-purple-100"
@@ -5274,9 +5471,9 @@ function StatementScreen(_ref31) {
     onNav = _ref31.onNav;
   var _useState43 = useState(function () {
       // 既定は前月（明細は締まってから見るものなので）
-      var d = new Date();
-      d.setMonth(d.getMonth() - 1);
-      return ym(d);
+      // 月末日（例：3/31）に setMonth(-1) すると 2/31 → 3/3 となり「今月」になってしまうため、1日で作る
+      var now0 = new Date();
+      return ym(new Date(now0.getFullYear(), now0.getMonth() - 1, 1));
     }),
     _useState44 = _slicedToArray(_useState43, 2),
     month = _useState44[0],
@@ -5325,19 +5522,24 @@ function StatementScreen(_ref31) {
         v = _ref35[1];
       return v !== 0;
     });
-    var dedRows = [["ロイヤリティ", p.royalty], ["車両リース料", p.lease], ["保険料", p.insurance], ["制服代", p.uniform], ["備品代", p.supplies], [(profile === null || profile === void 0 ? void 0 : profile.otherDeductionNote) || "その他控除", p.otherDeduction]].filter(function (_ref36) {
+    var dedRows = [[royaltyLabelOf(p), p.royalty], ["車両リース料", p.lease], ["保険料", p.insurance], ["制服代", p.uniform], ["備品代", p.supplies], [p.otherDeductionNoteUsed || (profile === null || profile === void 0 ? void 0 : profile.otherDeductionNote) || "その他控除", p.otherDeduction]].filter(function (_ref36) {
       var _ref37 = _slicedToArray(_ref36, 2),
         v = _ref37[1];
       return v !== 0;
     });
-    var detail = _toConsumableArray(monthRecs).sort(function (a, b) {
+    // 【検証9回目で修正】稼働明細に承認待ち・差し戻しの実績まで並び、明細の合計が「支給合計」と合わなかった。
+    // 支給合計と同じく、承認済みの実績だけを並べる。
+    var detail = _toConsumableArray(p.records || []).sort(function (a, b) {
       return String(a.date).localeCompare(String(b.date));
     }).map(function (r) {
       var add = num(r.charterDriver) + num(r.highwayFee) + num(r.parkingFee) + num(r.fuelAllowance) + num(r.otherAllowance);
-      return "<tr><td>".concat(esc(r.date), "</td><td class=\"n\">").concat(num(r.count) || "—", "</td><td class=\"n\">").concat(yen(num(r.driverAmount) - add), "</td><td class=\"n\">").concat(add ? yen(add) : "—", "</td><td class=\"n b\">").concat(yen(r.driverAmount), "</td></tr>");
+      return "<tr><td>".concat(esc(r.date), "</td><td class=\"n\">").concat(esc(recordQtyLabel(r)) || "—", "</td><td class=\"n\">").concat(yen(num(r.driverAmount) - add), "</td><td class=\"n\">").concat(add ? yen(add) : "—", "</td><td class=\"n b\">").concat(yen(r.driverAmount), "</td></tr>");
     }).join("");
-    var bank = profile !== null && profile !== void 0 && profile.bankName ? "".concat(esc(profile.bankName), " ").concat(esc(profile.branchName || ""), " ").concat(esc(profile.accountType || "普通"), " ").concat(esc(profile.accountNumber || ""), " ").concat(esc(profile.accountHolderKana || "")) : "口座情報が未登録です";
-    var html = "<!DOCTYPE html><html lang=\"ja\"><head><meta charset=\"utf-8\"><title>\u5831\u916C\u660E\u7D30 ".concat(esc(driver === null || driver === void 0 ? void 0 : driver.driverName), " ").concat(esc(month), "</title>\n<style>*{box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,'Hiragino Sans','Hiragino Kaku Gothic ProN','Noto Sans JP','Yu Gothic',sans-serif;color:#222;margin:0;padding:20px;background:#f5f5f5}\n.c{max-width:800px;margin:0 auto;background:#fff;padding:30px}\n.bar{text-align:right;margin-bottom:10px}.bar button{padding:10px 20px;font-size:14px;font-weight:700;color:#fff;background:#14b8a6;border:none;border-radius:6px;cursor:pointer;font-family:inherit}\n.top{height:5px;background:linear-gradient(90deg,#2dd4bf,#0f766e);margin:-30px -30px 18px}\n.h{display:flex;justify-content:space-between;align-items:flex-start}.co{font-size:17px;font-weight:700}.sub{font-size:11px;color:#777;margin-top:2px}\n.t{text-align:right}.t .l{font-size:22px;font-weight:700;letter-spacing:3px}.t .m{font-size:12px;color:#666;margin-top:4px}\n.line{height:2px;background:#222;margin:12px 0 18px}.to{font-size:19px;font-weight:700}\n.sm{display:flex;justify-content:space-between;align-items:center;background:#f0fdfa;border:1px solid #99f6e4;border-radius:6px;padding:16px 20px;margin:16px 0}\n.sm .l{font-size:12px;color:#0f766e;font-weight:700}.sm .a{font-size:32px;font-weight:700;color:#0f766e}\n.st{display:flex;gap:24px;font-size:12px;color:#555;margin-bottom:14px}.st b{font-size:15px;color:#222;margin-left:4px}\n.cols{display:flex;gap:20px}.col{flex:1}h3{font-size:13px;margin:0 0 6px;padding-bottom:4px;border-bottom:2px solid #222}\ntable{width:100%;border-collapse:collapse}td,th{padding:6px 4px;font-size:12px;border-bottom:1px solid #e5e5e5}\n.n{text-align:right}.b{font-weight:700}.e{color:#999;text-align:center}\n.tot{display:flex;justify-content:space-between;padding:8px 4px;margin-top:4px;border-top:2px solid #222;font-weight:700;font-size:13px}\n.d{margin-top:24px}.d thead th{background:#fafafa;border-top:2px solid #222;border-bottom:2px solid #222;text-align:left;font-size:11px}\n.bk{margin-top:20px;background:#f8f8f8;border-left:4px solid #14b8a6;padding:10px 14px;font-size:12px}\n.bk .l{font-size:11px;color:#777;font-weight:700}\n.w{color:#c62828;font-weight:700;font-size:12px}\n@page{ size: A4; margin: 12mm; }\n@media print{body{background:#fff;padding:0}.c{padding:0;max-width:100%;width:100%}.bar{display:none}tr{page-break-inside:avoid}}\n</style></head><body><div class=\"c\">\n<div class=\"bar\"><button onclick=\"window.print()\">\u5370\u5237 / PDF\u4FDD\u5B58</button></div>\n<div class=\"top\"></div>\n<div class=\"h\"><div><div class=\"co\">").concat(esc((company === null || company === void 0 ? void 0 : company.name) || "配送管理株式会社"), "</div>\n<div class=\"sub\">").concat(company !== null && company !== void 0 && company.address ? esc(company.address) + "<br>" : "").concat(company !== null && company !== void 0 && company.phone ? "TEL: " + esc(company.phone) : "", "</div></div>\n<div class=\"t\"><div class=\"l\">\u5831\u916C\u660E\u7D30\u66F8</div><div class=\"m\">\u5BFE\u8C61\u671F\u9593: ").concat(esc(yy), "\u5E74").concat(esc(String(Number(mm))), "\u6708\u5206</div><div class=\"m\">\u767A\u884C\u65E5: ").concat(esc(ymd()), "</div></div></div>\n<div class=\"line\"></div>\n<div class=\"to\">").concat(esc(driver === null || driver === void 0 ? void 0 : driver.driverName), " \u69D8</div>\n<div class=\"sm\"><div><div class=\"l\">\u304A\u632F\u8FBC\u91D1\u984D\uFF08\u652F\u7D66\u5408\u8A08 \u2212 \u63A7\u9664\u5408\u8A08\uFF09</div>\n").concat(p.isNegative ? '<div class="w">※控除が支給を上回っています。会社にご確認ください。</div>' : "", "</div>\n<div class=\"a\">").concat(yen(p.isNegative ? 0 : p.netPay), "</div></div>\n<div class=\"st\"><div>\u7A3C\u50CD\u65E5\u6570<b>").concat(p.workDays, "\u65E5</b></div><div>\u914D\u9001\u500B\u6570<b>").concat(p.totalCount.toLocaleString(), "\u500B</b></div><div>\u652F\u7D66\u5408\u8A08<b>").concat(yen(p.grossPay), "</b></div></div>\n<div class=\"cols\">\n<div class=\"col\"><h3>\u652F\u7D66</h3><table>").concat(rows(payRows), "</table><div class=\"tot\"><span>\u652F\u7D66\u5408\u8A08</span><span>").concat(yen(p.grossPay), "</span></div></div>\n<div class=\"col\"><h3>\u63A7\u9664</h3><table>").concat(rows(dedRows), "</table><div class=\"tot\"><span>\u63A7\u9664\u5408\u8A08</span><span>").concat(yen(p.totalDeduction), "</span></div></div>\n</div>\n<div class=\"d\"><h3 style=\"border:none;margin-bottom:0\">\u7A3C\u50CD\u660E\u7D30</h3><table>\n<thead><tr><th>\u65E5\u4ED8</th><th class=\"n\">\u500B\u6570</th><th class=\"n\">\u57FA\u672C\u5831\u916C</th><th class=\"n\">\u5B9F\u8CBB\u30FB\u624B\u5F53</th><th class=\"n\">\u8A08</th></tr></thead>\n<tbody>").concat(detail || '<tr><td colspan="5" class="e">この月の稼働記録はありません</td></tr>', "</tbody></table></div>\n<div class=\"bk\"><div class=\"l\">\u632F\u8FBC\u5148</div><div>").concat(bank, "</div></div>\n</div></body></html>");
+    var emp = isEmployeeProfile(profile);
+    // 締め前の月は、会社の承認や締め処理でまだ金額が変わる。確定した明細と誤解されないよう明記する。
+    var provisional = !isMonthClosed(company, month);
+    var bank = emp ? "パート・正社員のため給与で精算します（振込対象外）" : profile !== null && profile !== void 0 && profile.bankName ? "".concat(esc(profile.bankName), " ").concat(esc(profile.branchName || ""), " ").concat(esc(profile.accountType || "普通"), " ").concat(esc(profile.accountNumber || ""), " ").concat(esc(profile.accountHolderKana || "")) : "口座情報が未登録です";
+    var html = "<!DOCTYPE html><html lang=\"ja\"><head><meta charset=\"utf-8\"><title>\u5831\u916C\u660E\u7D30 ".concat(esc(driver === null || driver === void 0 ? void 0 : driver.driverName), " ").concat(esc(month), "</title>\n<style>*{box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,'Hiragino Sans','Hiragino Kaku Gothic ProN','Noto Sans JP','Yu Gothic',sans-serif;color:#222;margin:0;padding:20px;background:#f5f5f5}\n.c{max-width:800px;margin:0 auto;background:#fff;padding:30px}\n.bar{text-align:right;margin-bottom:10px}.bar button{padding:10px 20px;font-size:14px;font-weight:700;color:#fff;background:#14b8a6;border:none;border-radius:6px;cursor:pointer;font-family:inherit}\n.top{height:5px;background:linear-gradient(90deg,#2dd4bf,#0f766e);margin:0 -30px 18px}\n.h{display:flex;justify-content:space-between;align-items:flex-start}.co{font-size:17px;font-weight:700}.sub{font-size:11px;color:#777;margin-top:2px}\n.t{text-align:right}.t .l{font-size:22px;font-weight:700;letter-spacing:3px}.t .m{font-size:12px;color:#666;margin-top:4px}\n.line{height:2px;background:#222;margin:12px 0 18px}.to{font-size:19px;font-weight:700}\n.sm{display:flex;justify-content:space-between;align-items:center;background:#f0fdfa;border:1px solid #99f6e4;border-radius:6px;padding:16px 20px;margin:16px 0}\n.sm .l{font-size:12px;color:#0f766e;font-weight:700}.sm .a{font-size:32px;font-weight:700;color:#0f766e}\n.st{display:flex;gap:24px;font-size:12px;color:#555;margin-bottom:14px}.st b{font-size:15px;color:#222;margin-left:4px}\n.cols{display:flex;gap:20px}.col{flex:1}h3{font-size:13px;margin:0 0 6px;padding-bottom:4px;border-bottom:2px solid #222}\ntable{width:100%;border-collapse:collapse}td,th{padding:6px 4px;font-size:12px;border-bottom:1px solid #e5e5e5}\n.n{text-align:right}.b{font-weight:700}.e{color:#999;text-align:center}\n.tot{display:flex;justify-content:space-between;padding:8px 4px;margin-top:4px;border-top:2px solid #222;font-weight:700;font-size:13px}\n.d{margin-top:24px}.d thead th{background:#fafafa;border-top:2px solid #222;border-bottom:2px solid #222;text-align:left;font-size:11px}.d thead th.n{text-align:right}\n.bk{margin-top:20px;background:#f8f8f8;border-left:4px solid #14b8a6;padding:10px 14px;font-size:12px}\n.bk .l{font-size:11px;color:#777;font-weight:700}\n.w{color:#c62828;font-weight:700;font-size:12px}\n@page{ size: A4; margin: 12mm; }\n@media print{body{background:#fff;padding:0}.c{padding:0;max-width:100%;width:100%}.top{margin:0 0 18px}.bar{display:none}tr{page-break-inside:avoid}}\n</style></head><body><div class=\"c\">\n<div class=\"bar\"><button onclick=\"window.print()\">\u5370\u5237 / PDF\u4FDD\u5B58</button></div>\n<div class=\"top\"></div>\n<div class=\"h\"><div><div class=\"co\">").concat(esc((company === null || company === void 0 ? void 0 : company.name) || "配送管理株式会社"), "</div>\n<div class=\"sub\">").concat(company !== null && company !== void 0 && company.address ? esc(company.address) + "<br>" : "").concat(company !== null && company !== void 0 && company.phone ? "TEL: " + esc(company.phone) : "", "</div></div>\n<div class=\"t\"><div class=\"l\">\u5831\u916C\u660E\u7D30\u66F8</div><div class=\"m\">\u5BFE\u8C61\u671F\u9593: ").concat(esc(yy), "\u5E74").concat(esc(String(Number(mm))), "\u6708\u5206</div><div class=\"m\">\u767A\u884C\u65E5: ").concat(esc(ymd()), "</div></div></div>\n<div class=\"line\"></div>\n<div class=\"to\">").concat(esc(driver === null || driver === void 0 ? void 0 : driver.driverName), " \u69D8</div>\n").concat(provisional ? '<div class="w" style="margin-top:8px">※' + esc(yy) + '年' + esc(String(Number(mm))) + '月分はまだ締め処理が済んでいないため、確定前の金額です（会社が承認した実績のみで計算しています）。</div>\n' : "", "<div class=\"sm\"><div><div class=\"l\">").concat(emp ? "支払額（給与で精算・振込対象外）" : p.consumptionTax > 0 ? "お振込金額（支給合計 ＋ 消費税 − 控除合計）" : "お振込金額（支給合計 − 控除合計）", "</div>\n").concat(p.isNegative ? '<div class="w">※控除が支給を上回っています。会社にご確認ください。</div>' : "", "</div>\n<div class=\"a\">").concat(yen(p.isNegative ? 0 : p.netPay), "</div></div>\n<div class=\"st\"><div>\u7A3C\u50CD\u65E5\u6570<b>").concat(p.workDays, "\u65E5</b></div><div>\u914D\u9001\u500B\u6570<b>").concat(p.totalCount.toLocaleString(), "\u500B</b></div><div>\u652F\u7D66\u5408\u8A08<b>").concat(yen(p.grossPay), "</b></div></div>\n<div class=\"cols\">\n<div class=\"col\"><h3>\u652F\u7D66</h3><table>").concat(rows(payRows), "</table><div class=\"tot\"><span>\u652F\u7D66\u5408\u8A08</span><span>").concat(yen(p.grossPay), "</span></div>").concat(p.consumptionTax > 0 ? "<div class=\"tot\" style=\"border-top:1px solid #ccc;font-weight:400\"><span>消費税（10%" + (p.taxExemptReimbursement > 0 ? "・立替金を除く" : "") + "）</span><span>" + yen(p.consumptionTax) + "</span></div>" : "", "</div>\n<div class=\"col\"><h3>\u63A7\u9664</h3><table>").concat(rows(dedRows), "</table><div class=\"tot\"><span>\u63A7\u9664\u5408\u8A08</span><span>").concat(yen(p.totalDeduction), "</span></div></div>\n</div>\n<div class=\"d\"><h3 style=\"border:none;margin-bottom:0\">\u7A3C\u50CD\u660E\u7D30</h3><table>\n<thead><tr><th>\u65E5\u4ED8</th><th class=\"n\">数量</th><th class=\"n\">\u57FA\u672C\u5831\u916C</th><th class=\"n\">チャーター・実費・手当</th><th class=\"n\">\u8A08</th></tr></thead>\n<tbody>").concat(detail || '<tr><td colspan="5" class="e">この月の稼働記録はありません</td></tr>', "</tbody></table></div>\n<div class=\"bk\"><div class=\"l\">").concat(emp ? "お支払い方法" : "\u632F\u8FBC\u5148", "</div><div>").concat(bank, "</div></div>\n</div></body></html>");
     var w = window.open("", "_blank");
     if (!w) {
       alert("ポップアップがブロックされました。ブラウザの設定で許可してください。");
@@ -5369,11 +5571,13 @@ function StatementScreen(_ref31) {
     className: "bg-white px-5 py-5 text-center"
   }, /*#__PURE__*/React.createElement("p", {
     className: "text-gray-500 text-xs font-bold mb-1"
-  }, "\u632F\u8FBC\u4E88\u5B9A\u984D"), /*#__PURE__*/React.createElement("p", {
+  }, isEmployeeProfile(profile) ? "支払額（給与で精算・振込対象外）" : "\u632F\u8FBC\u4E88\u5B9A\u984D"), /*#__PURE__*/React.createElement("p", {
     className: "text-gray-900 text-4xl font-black leading-none"
   }, yen(p.isNegative ? 0 : p.netPay)), /*#__PURE__*/React.createElement("p", {
     className: "text-gray-400 text-xs mt-2"
-  }, "\u7A3C\u50CD", p.workDays, "\u65E5 / \u652F\u7D66 ", yen(p.grossPay))), /*#__PURE__*/React.createElement("div", {
+  }, "\u7A3C\u50CD", p.workDays, "\u65E5 / \u652F\u7D66 ", yen(p.grossPay), p.consumptionTax > 0 ? " ＋ 消費税 " + yen(p.consumptionTax) : ""), !isMonthClosed(company, month) && p.workDays > 0 && /*#__PURE__*/React.createElement("p", {
+    className: "text-[11px] text-amber-600 mt-2"
+  }, "締め前のため確定前の金額です（承認済みの実績のみ）")), /*#__PURE__*/React.createElement("div", {
     className: "flex divide-x divide-gray-100"
   }, /*#__PURE__*/React.createElement("div", {
     className: "flex-1 px-4 py-3 text-center"
@@ -5453,6 +5657,13 @@ function ShiftReportScreen(_ref100) {
   // 再現した）。existing はあくまで「サーバー側に確定している内容」の
   // ベースとして扱い、その上に、まだ提出していない一時保存（下書き）が
   // あれば、必ず重ねて復元する。
+  // 【検証（ハコログ2回目）で追加】前回の勤務の帰庫メーター。乗務前日報の出庫メーターの目安として表示し、
+  // 同じ車両で前回より小さい値（打ち間違い・メーターの読み違い）を入れたときに確認する。
+  var prevReport = (shiftReports || []).filter(function (r) {
+    return r && r.driverId === driverId && (r.shiftId || r.date) !== shiftKey && r.odometerIn && !isNaN(Number(r.odometerIn));
+  }).sort(function (a, b) {
+    return String(b.postSubmittedAt || b.date || "").localeCompare(String(a.postSubmittedAt || a.date || ""));
+  })[0] || null;
   var draftKey = "".concat(K_SR_DRAFT, "_").concat(driverId, "_").concat(shiftKey, "_").concat(type);
   var draft = LS.get(draftKey, null);
 
@@ -5510,7 +5721,7 @@ function ShiftReportScreen(_ref100) {
   var handleTimeChange = function handleTimeChange(key, nextKey, maxLen) {
     var len = maxLen || 2;
     return function (e) {
-      var v = e.target.value.replace(/[^0-9]/g, "").slice(0, len);
+      var v = digitsOnly(e.target.value).slice(0, len);
       f(key, v);
       if (nextKey && v.length >= len) {
         var nextEl = timeInputRefs.current[nextKey];
@@ -5521,7 +5732,7 @@ function ShiftReportScreen(_ref100) {
   // 数値専用（時・分以外。メーター等）の入力欄用：数字以外を除去するだけで、
   // 次の欄への自動移動は行わない。
   var handleNumericChange = function handleNumericChange(key) {
-    return function (e) { return f(key, e.target.value.replace(/[^0-9]/g, "")); };
+    return function (e) { return f(key, digitsOnly(e.target.value)); };
   };
 
   var addWaypoint = function addWaypoint() {
@@ -5537,7 +5748,7 @@ function ShiftReportScreen(_ref100) {
   // 同じく、2桁入力で自動的に次へフォーカス移動する。
   var handleWaypointTimeChange = function handleWaypointTimeChange(i, key, nextKey) {
     return function (e) {
-      var v = e.target.value.replace(/[^0-9]/g, "").slice(0, 2);
+      var v = digitsOnly(e.target.value).slice(0, 2);
       setWaypoint(i, key, v);
       if (nextKey && v.length >= 2) {
         var nextEl = timeInputRefs.current["wp".concat(i, "_").concat(nextKey)];
@@ -5665,12 +5876,24 @@ function ShiftReportScreen(_ref100) {
         return;
       }
     }
+    if (isPre && prevReport && form.odometerOut && (!prevReport.vehicle || !form.vehicle || String(prevReport.vehicle).replace(/\s/g, "") === String(form.vehicle).replace(/\s/g, "")) && Number(form.odometerOut) < Number(prevReport.odometerIn)) {
+      setTab("record");
+      if (!window.confirm("出庫メーター（".concat(Number(form.odometerOut).toLocaleString(), "km）が、前回の帰庫メーター（").concat(Number(prevReport.odometerIn).toLocaleString(), "km）より小さくなっています。\n入力に誤りがあるかもしれません。このまま提出しますか？"))) {
+        return;
+      }
+    }
     if (!isPre && form.odometerOut && form.odometerIn) {
       var outVal = Number(form.odometerOut);
       var inVal = Number(form.odometerIn);
       if (inVal < outVal) {
         setTab("record");
         if (!window.confirm("帰庫メーター（".concat(inVal, "km）が、出庫メーター（").concat(outVal, "km）より小さくなっています。\n入力に誤りがあるかもしれません。このまま提出しますか？"))) {
+          return;
+        }
+      } else if (inVal - outVal > 1000) {
+        // 桁の打ち間違い（0が1つ多い等）で、1日の走行距離が極端な値になっていないか確認する
+        setTab("record");
+        if (!window.confirm("本日の走行距離が ".concat((inVal - outVal).toLocaleString(), "km になっています（出庫 ").concat(outVal.toLocaleString(), "km → 帰庫 ").concat(inVal.toLocaleString(), "km）。\n入力に誤りがあるかもしれません。このまま提出しますか？"))) {
           return;
         }
       }
@@ -5757,7 +5980,7 @@ function ShiftReportScreen(_ref100) {
       }, /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-400" }, "日報入力日"), /*#__PURE__*/React.createElement("p", { className: "text-sm text-gray-800" }, todayStr)),
         /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 border-b border-gray-100" }, /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-400" }, "車両番号", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")), /*#__PURE__*/React.createElement("input", { value: form.vehicle, onChange: function onChange(e) { return f("vehicle", e.target.value); }, className: "w-full border border-gray-300 rounded px-2 py-1 text-sm mt-1" })),
         /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 border-b border-gray-100" }, /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-400" }, "出庫地", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")), /*#__PURE__*/React.createElement("input", { value: form.departureLoc, onChange: function onChange(e) { return f("departureLoc", e.target.value); }, className: "w-full border border-gray-200 rounded px-2 py-1 text-sm mt-1" })),
-        /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 border-b border-gray-100" }, /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-400" }, "出庫時メーター", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")), /*#__PURE__*/React.createElement("div", { className: "flex items-center gap-2 mt-1" }, /*#__PURE__*/React.createElement("input", { value: form.odometerOut, onChange: handleNumericChange("odometerOut"), inputMode: "numeric", pattern: "[0-9]*", className: "flex-1 border border-gray-200 rounded px-2 py-1 text-sm text-right" }), /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-500" }, "km"))),
+        /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 border-b border-gray-100" }, /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-400" }, "出庫時メーター", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")), /*#__PURE__*/React.createElement("div", { className: "flex items-center gap-2 mt-1" }, /*#__PURE__*/React.createElement("input", { value: form.odometerOut, onChange: handleNumericChange("odometerOut"), inputMode: "numeric", pattern: "[0-9]*", className: "flex-1 border border-gray-200 rounded px-2 py-1 text-sm text-right" }), /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-500" }, "km")), prevReport && /*#__PURE__*/React.createElement("p", { className: "text-[11px] text-gray-400 mt-1" }, "前回の帰庫メーター：", Number(prevReport.odometerIn).toLocaleString(), "km", prevReport.vehicle ? "（" + prevReport.vehicle + "・" + String(prevReport.date || "").slice(5).replace("-", "/") + "）" : "")),
         /*#__PURE__*/React.createElement("div", { className: "px-3 py-2" }, /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-400" }, "天気", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")), /*#__PURE__*/React.createElement("div", { className: "flex gap-2 mt-2" }, [{ key: "sun", label: "晴", emoji: "\u2600\uFE0F" }, { key: "cloud", label: "曇", emoji: "\u2601\uFE0F" }, { key: "rain", label: "雨", emoji: "\uD83C\uDF27\uFE0F" }, { key: "snow", label: "雪", emoji: "\u2744\uFE0F" }].map(function (w) {
           return /*#__PURE__*/React.createElement("button", {
             key: w.key,
@@ -5771,10 +5994,16 @@ function ShiftReportScreen(_ref100) {
         /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 border-b border-gray-100" }, /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-400" }, "出庫時間", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")), /*#__PURE__*/React.createElement("div", { className: "flex items-center gap-1 mt-1" }, /*#__PURE__*/React.createElement("input", { value: form.depH, onChange: handleTimeChange("depH", "depM", 2), ref: setTimeRef("depH"), inputMode: "numeric", pattern: "[0-9]*", placeholder: "09", maxLength: 2, className: "border border-gray-300 rounded px-2 py-1 text-sm text-center", style: { width: "56px" } }), /*#__PURE__*/React.createElement("span", { className: "text-gray-400" }, ":"), /*#__PURE__*/React.createElement("input", { value: form.depM, onChange: handleTimeChange("depM", null, 2), ref: setTimeRef("depM"), inputMode: "numeric", pattern: "[0-9]*", placeholder: "00", maxLength: 2, className: "border border-gray-300 rounded px-2 py-1 text-sm text-center", style: { width: "56px" } }))),
         /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 border-b border-gray-100" }, /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-400" }, "帰庫時間", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")), /*#__PURE__*/React.createElement("div", { className: "flex items-center gap-1 mt-1" }, /*#__PURE__*/React.createElement("input", { value: form.retH, onChange: handleTimeChange("retH", "retM", 2), ref: setTimeRef("retH"), inputMode: "numeric", pattern: "[0-9]*", placeholder: "17", maxLength: 2, className: "border border-gray-300 rounded px-2 py-1 text-sm text-center", style: { width: "56px" } }), /*#__PURE__*/React.createElement("span", { className: "text-gray-400" }, ":"), /*#__PURE__*/React.createElement("input", { value: form.retM, onChange: handleTimeChange("retM", null, 2), ref: setTimeRef("retM"), inputMode: "numeric", pattern: "[0-9]*", placeholder: "00", maxLength: 2, className: "border border-gray-300 rounded px-2 py-1 text-sm text-center", style: { width: "56px" } }))),
         /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 border-b border-gray-100" }, /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-400" }, "帰庫地", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")), /*#__PURE__*/React.createElement("input", { value: form.returnLoc, onChange: function onChange(e) { return f("returnLoc", e.target.value); }, className: "w-full border border-gray-200 rounded px-2 py-1 text-sm mt-1" })),
-        /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 border-b border-gray-100" }, /*#__PURE__*/React.createElement("p", { className: "text-xs font-bold text-gray-600" }, "■走行距離"), /*#__PURE__*/React.createElement("div", { className: "flex items-center justify-between mt-1" }, /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-400" }, "出庫メーター", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")), /*#__PURE__*/React.createElement("div", { className: "flex items-center gap-1" }, /*#__PURE__*/React.createElement("input", { value: form.odometerOut, onChange: handleNumericChange("odometerOut"), inputMode: "numeric", pattern: "[0-9]*", className: "border border-gray-200 rounded px-2 py-1 text-sm text-right", style: { width: "96px" } }), /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-500" }, "km"))), /*#__PURE__*/React.createElement("div", { className: "flex items-center justify-between mt-1.5" }, /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-400" }, "帰庫メーター", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")), /*#__PURE__*/React.createElement("div", { className: "flex items-center gap-1" }, /*#__PURE__*/React.createElement("input", { value: form.odometerIn, onChange: handleNumericChange("odometerIn"), inputMode: "numeric", pattern: "[0-9]*", className: "border border-gray-200 rounded px-2 py-1 text-sm text-right", style: { width: "96px" } }), /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-500" }, "km")))),
+        /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 border-b border-gray-100" }, /*#__PURE__*/React.createElement("p", { className: "text-xs font-bold text-gray-600" }, "■走行距離"), /*#__PURE__*/React.createElement("div", { className: "flex items-center justify-between mt-1" }, /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-400" }, "出庫メーター", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")), /*#__PURE__*/React.createElement("div", { className: "flex items-center gap-1" }, /*#__PURE__*/React.createElement("input", { value: form.odometerOut, onChange: handleNumericChange("odometerOut"), inputMode: "numeric", pattern: "[0-9]*", className: "border border-gray-200 rounded px-2 py-1 text-sm text-right", style: { width: "96px" } }), /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-500" }, "km"))), /*#__PURE__*/React.createElement("div", { className: "flex items-center justify-between mt-1.5" }, /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-400" }, "帰庫メーター", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")), /*#__PURE__*/React.createElement("div", { className: "flex items-center gap-1" }, /*#__PURE__*/React.createElement("input", { value: form.odometerIn, onChange: handleNumericChange("odometerIn"), inputMode: "numeric", pattern: "[0-9]*", className: "border border-gray-200 rounded px-2 py-1 text-sm text-right", style: { width: "96px" } }), /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-500" }, "km"))),
+          // 出庫・帰庫メーターの差（本日の走行距離）をその場で表示し、打ち間違いに気づけるようにする
+          form.odometerOut !== "" && form.odometerIn !== "" && form.odometerOut != null && form.odometerIn != null && function () {
+            var dist = Number(form.odometerIn) - Number(form.odometerOut);
+            var bad = dist < 0 || dist > 1000;
+            return /*#__PURE__*/React.createElement("div", { className: "flex items-center justify-between mt-1.5 pt-1.5 border-t border-dashed border-gray-200" }, /*#__PURE__*/React.createElement("span", { className: "text-xs font-bold ".concat(bad ? "text-red-600" : "text-gray-600") }, "本日の走行距離"), /*#__PURE__*/React.createElement("span", { className: "text-sm font-black ".concat(bad ? "text-red-600" : "text-teal-700") }, dist.toLocaleString(), " km", dist < 0 ? "（帰庫が出庫より小さい）" : dist > 1000 ? "（多すぎます）" : ""));
+          }()),
         // 【機能追加・法令調査で発見】休憩・仮眠をとった場合の地点・日時は、
         // 業務記録（運転日報）の必須記録項目。
-        /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 border-b border-gray-100" }, /*#__PURE__*/React.createElement("p", { className: "text-xs font-bold text-gray-600" }, "\u2588\u4F11\u61A9\u30FB\u4EEE\u7720", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")), /*#__PURE__*/React.createElement("div", { className: "grid grid-cols-2 gap-1.5 mt-1" }, /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return f("restTaken", "no"); }, className: "py-2 rounded text-sm ".concat(form.restTaken === "no" ? "bg-gray-400 text-white" : "bg-gray-100 text-gray-500") }, "\u306A\u3057"), /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return f("restTaken", "yes"); }, className: "py-2 rounded text-sm ".concat(form.restTaken === "yes" ? "bg-teal-500 text-white" : "bg-gray-100 text-gray-400") }, "\u3042\u308A")), form.restTaken === "yes" && /*#__PURE__*/React.createElement("div", { className: "mt-2 flex flex-col gap-1.5" }, /*#__PURE__*/React.createElement("input", { value: form.restLoc, onChange: function onChange(e) { return f("restLoc", e.target.value); }, placeholder: "\u4F11\u61A9\u3057\u305F\u5834\u6240\uFF08\u4F8B\uFF1A\u25EF\u25EF\u30B5\u30FC\u30D3\u30B9\u30A8\u30EA\u30A2\uFF09", className: "w-full border border-gray-200 rounded px-2 py-1.5 text-sm" }), /*#__PURE__*/React.createElement("div", { className: "flex items-center gap-1" }, /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-400 flex-shrink-0", style: { width: "32px" } }, "\u958B\u59CB"), /*#__PURE__*/React.createElement("input", { value: form.restH, onChange: handleTimeChange("restH", "restM", 2), ref: setTimeRef("restH"), inputMode: "numeric", pattern: "[0-9]*", placeholder: "12", maxLength: 2, className: "border border-gray-300 rounded px-2 py-1 text-sm text-center", style: { width: "56px" } }), /*#__PURE__*/React.createElement("span", { className: "text-gray-400" }, ":"), /*#__PURE__*/React.createElement("input", { value: form.restM, onChange: handleTimeChange("restM", "restEndH", 2), ref: setTimeRef("restM"), inputMode: "numeric", pattern: "[0-9]*", placeholder: "00", maxLength: 2, className: "border border-gray-300 rounded px-2 py-1 text-sm text-center", style: { width: "56px" } })), /*#__PURE__*/React.createElement("div", { className: "flex items-center gap-1" }, /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-400 flex-shrink-0", style: { width: "32px" } }, "\u7D42\u4E86"), /*#__PURE__*/React.createElement("input", { value: form.restEndH, onChange: handleTimeChange("restEndH", "restEndM", 2), ref: setTimeRef("restEndH"), inputMode: "numeric", pattern: "[0-9]*", placeholder: "12", maxLength: 2, className: "border border-gray-300 rounded px-2 py-1 text-sm text-center", style: { width: "56px" } }), /*#__PURE__*/React.createElement("span", { className: "text-gray-400" }, ":"), /*#__PURE__*/React.createElement("input", { value: form.restEndM, onChange: handleTimeChange("restEndM", null, 2), ref: setTimeRef("restEndM"), inputMode: "numeric", pattern: "[0-9]*", placeholder: "30", maxLength: 2, className: "border border-gray-300 rounded px-2 py-1 text-sm text-center", style: { width: "56px" } })))),
+        /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 border-b border-gray-100" }, /*#__PURE__*/React.createElement("p", { className: "text-xs font-bold text-gray-600" }, "\u25A0\u4F11\u61A9\u30FB\u4EEE\u7720", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")), /*#__PURE__*/React.createElement("div", { className: "grid grid-cols-2 gap-1.5 mt-1" }, /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return f("restTaken", "no"); }, className: "py-2 rounded text-sm ".concat(form.restTaken === "no" ? "bg-gray-400 text-white" : "bg-gray-100 text-gray-500") }, "\u306A\u3057"), /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return f("restTaken", "yes"); }, className: "py-2 rounded text-sm ".concat(form.restTaken === "yes" ? "bg-teal-500 text-white" : "bg-gray-100 text-gray-500") }, "\u3042\u308A")), form.restTaken === "yes" && /*#__PURE__*/React.createElement("div", { className: "mt-2 flex flex-col gap-1.5" }, /*#__PURE__*/React.createElement("input", { value: form.restLoc, onChange: function onChange(e) { return f("restLoc", e.target.value); }, placeholder: "\u4F11\u61A9\u3057\u305F\u5834\u6240\uFF08\u4F8B\uFF1A\u25EF\u25EF\u30B5\u30FC\u30D3\u30B9\u30A8\u30EA\u30A2\uFF09", className: "w-full border border-gray-200 rounded px-2 py-1.5 text-sm" }), /*#__PURE__*/React.createElement("div", { className: "flex items-center gap-1" }, /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-400 flex-shrink-0", style: { width: "32px" } }, "\u958B\u59CB"), /*#__PURE__*/React.createElement("input", { value: form.restH, onChange: handleTimeChange("restH", "restM", 2), ref: setTimeRef("restH"), inputMode: "numeric", pattern: "[0-9]*", placeholder: "12", maxLength: 2, className: "border border-gray-300 rounded px-2 py-1 text-sm text-center", style: { width: "56px" } }), /*#__PURE__*/React.createElement("span", { className: "text-gray-400" }, ":"), /*#__PURE__*/React.createElement("input", { value: form.restM, onChange: handleTimeChange("restM", "restEndH", 2), ref: setTimeRef("restM"), inputMode: "numeric", pattern: "[0-9]*", placeholder: "00", maxLength: 2, className: "border border-gray-300 rounded px-2 py-1 text-sm text-center", style: { width: "56px" } })), /*#__PURE__*/React.createElement("div", { className: "flex items-center gap-1" }, /*#__PURE__*/React.createElement("span", { className: "text-xs text-gray-400 flex-shrink-0", style: { width: "32px" } }, "\u7D42\u4E86"), /*#__PURE__*/React.createElement("input", { value: form.restEndH, onChange: handleTimeChange("restEndH", "restEndM", 2), ref: setTimeRef("restEndH"), inputMode: "numeric", pattern: "[0-9]*", placeholder: "12", maxLength: 2, className: "border border-gray-300 rounded px-2 py-1 text-sm text-center", style: { width: "56px" } }), /*#__PURE__*/React.createElement("span", { className: "text-gray-400" }, ":"), /*#__PURE__*/React.createElement("input", { value: form.restEndM, onChange: handleTimeChange("restEndM", null, 2), ref: setTimeRef("restEndM"), inputMode: "numeric", pattern: "[0-9]*", placeholder: "30", maxLength: 2, className: "border border-gray-300 rounded px-2 py-1 text-sm text-center", style: { width: "56px" } })))),
         /*#__PURE__*/React.createElement("div", { className: "px-3 py-2 border-b border-gray-100" }, /*#__PURE__*/React.createElement("p", { className: "text-xs font-bold text-gray-600" }, "■運行状況"),
           yesNoButtons("abnormal", "異常"),
           form.abnormal === "yes" && /*#__PURE__*/React.createElement("textarea", { value: form.abnormalNote, onChange: function onChange(e) { return f("abnormalNote", e.target.value); }, rows: 2, placeholder: "遅延・事故の概要及び、原因について記入", className: "w-full border border-gray-200 rounded px-2 py-1.5 text-xs mt-2 resize-none" })),
@@ -5793,11 +6022,11 @@ function ShiftReportScreen(_ref100) {
           /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-700 mb-1" }, "アルコールチェックをしましたか（検知器使用）", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")),
           /*#__PURE__*/React.createElement("div", { className: "grid grid-cols-2 gap-1.5 mb-2" },
             /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return f("postAlcoholDetectorUsed", form.postAlcoholDetectorUsed === false ? null : false); }, className: "py-2 rounded-lg text-sm font-medium ".concat(form.postAlcoholDetectorUsed === false ? "bg-gray-400 text-white" : "bg-gray-100 text-gray-500") }, "\u4F7F\u7528\u3057\u3066\u3044\u306A\u3044"),
-            /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return f("postAlcoholDetectorUsed", form.postAlcoholDetectorUsed === true ? null : true); }, className: "py-2 rounded-lg text-sm font-medium ".concat(form.postAlcoholDetectorUsed === true ? "bg-teal-500 text-white" : "bg-gray-100 text-gray-400") }, "\u4F7F\u7528\u3057\u305F")),
-          /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-700 mb-1" }, "\u9152\u6C17\u5E2F\u3073\u306F\u3042\u308A\u307E\u305B\u3093\u304B", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")),
+            /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return f("postAlcoholDetectorUsed", form.postAlcoholDetectorUsed === true ? null : true); }, className: "py-2 rounded-lg text-sm font-medium ".concat(form.postAlcoholDetectorUsed === true ? "bg-teal-500 text-white" : "bg-gray-100 text-gray-500") }, "\u4F7F\u7528\u3057\u305F")),
+          /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-700 mb-1" }, "酒気帯びの有無", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")),
           /*#__PURE__*/React.createElement("div", { className: "grid grid-cols-2 gap-1.5 mb-2" },
             /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return f("postAlcoholStatus", form.postAlcoholStatus === "bad" ? null : "bad"); }, className: "py-2 rounded-lg text-sm font-medium ".concat(form.postAlcoholStatus === "bad" ? "bg-red-500 text-white" : "bg-gray-100 text-gray-500") }, "\u3042\u308A"),
-            /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return f("postAlcoholStatus", form.postAlcoholStatus === "ok" ? null : "ok"); }, className: "py-2 rounded-lg text-sm font-medium ".concat(form.postAlcoholStatus === "ok" ? "bg-teal-500 text-white" : "bg-gray-100 text-gray-400") }, "\u306A\u3057")),
+            /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return f("postAlcoholStatus", form.postAlcoholStatus === "ok" ? null : "ok"); }, className: "py-2 rounded-lg text-sm font-medium ".concat(form.postAlcoholStatus === "ok" ? "bg-teal-500 text-white" : "bg-gray-100 text-gray-500") }, "\u306A\u3057")),
           form.postAlcoholStatus === "bad" && /*#__PURE__*/React.createElement("div", { className: "bg-red-50 border-2 border-red-300 rounded-xl px-3 py-2 mb-2" },
             /*#__PURE__*/React.createElement("p", { className: "text-xs font-black text-red-700" }, "\u30A2\u30EB\u30B3\u30FC\u30EB\u304C\u78BA\u8A8D\u3055\u308C\u307E\u3057\u305F"),
             /*#__PURE__*/React.createElement("p", { className: "text-[11px] text-red-600 mt-1" }, "\u305F\u3060\u3061\u306B\u4F1A\u793E\u306B\u9023\u7D61\u3057\u3066\u304F\u3060\u3055\u3044\u3002")),
@@ -5825,13 +6054,13 @@ function ShiftReportScreen(_ref100) {
           /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-700 mb-1.5" }, label, /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")),
           /*#__PURE__*/React.createElement("div", { className: "grid grid-cols-2 gap-1.5" },
             /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return setHealthVal(i, (form.healthVals || {})[i] === "bad" ? null : "bad"); }, className: "py-2 rounded-lg text-sm font-medium ".concat((form.healthVals || {})[i] === "bad" ? "bg-red-500 text-white" : "bg-gray-100 text-gray-500") }, "不良"),
-            /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return setHealthVal(i, (form.healthVals || {})[i] === "ok" ? null : "ok"); }, className: "py-2 rounded-lg text-sm font-medium ".concat((form.healthVals || {})[i] === "ok" ? "bg-teal-500 text-white" : "bg-gray-100 text-gray-400") }, "良")));
+            /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return setHealthVal(i, (form.healthVals || {})[i] === "ok" ? null : "ok"); }, className: "py-2 rounded-lg text-sm font-medium ".concat((form.healthVals || {})[i] === "ok" ? "bg-teal-500 text-white" : "bg-gray-100 text-gray-500") }, "良")));
       })),
       /*#__PURE__*/React.createElement("div", { className: "px-3 py-2.5 border-t border-gray-100" },
         /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-700 mb-1.5" }, "アルコールチェックをしましたか（検知器使用）", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")),
         /*#__PURE__*/React.createElement("div", { className: "grid grid-cols-2 gap-1.5" },
           /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return f("alcoholDetectorUsed", form.alcoholDetectorUsed === false ? null : false); }, className: "py-2 rounded-lg text-sm font-medium ".concat(form.alcoholDetectorUsed === false ? "bg-gray-400 text-white" : "bg-gray-100 text-gray-500") }, "使用していない"),
-          /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return f("alcoholDetectorUsed", form.alcoholDetectorUsed === true ? null : true); }, className: "py-2 rounded-lg text-sm font-medium ".concat(form.alcoholDetectorUsed === true ? "bg-teal-500 text-white" : "bg-gray-100 text-gray-400") }, "使用した"))),
+          /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return f("alcoholDetectorUsed", form.alcoholDetectorUsed === true ? null : true); }, className: "py-2 rounded-lg text-sm font-medium ".concat(form.alcoholDetectorUsed === true ? "bg-teal-500 text-white" : "bg-gray-100 text-gray-500") }, "使用した"))),
       alcoholDetected && /*#__PURE__*/React.createElement("div", { className: "mx-3 mb-3 bg-red-50 border-2 border-red-300 rounded-xl px-4 py-3" },
         /*#__PURE__*/React.createElement("p", { className: "text-sm font-black text-red-700" }, "アルコールが確認されました"),
         /*#__PURE__*/React.createElement("p", { className: "text-xs text-red-600 mt-1 leading-relaxed" }, /*#__PURE__*/React.createElement("b", null, "運転できません。"), "絶対に乗務しないでください。", /*#__PURE__*/React.createElement("br", null), "ただちに会社に連絡してください。"))),
@@ -5870,7 +6099,7 @@ function ShiftReportScreen(_ref100) {
         /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-700 mb-1.5" }, "前回の運行において異状がないこと"),
         /*#__PURE__*/React.createElement("div", { className: "grid grid-cols-2 gap-1.5 mb-2" },
           /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return f("prevAbnormal", form.prevAbnormal === "repair" ? null : "repair"); }, className: "py-2 rounded-lg text-sm font-medium ".concat(form.prevAbnormal === "repair" ? "bg-red-500 text-white" : "bg-gray-100 text-gray-500") }, "修理対応"),
-          /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return f("prevAbnormal", form.prevAbnormal === "ok" ? null : "ok"); }, className: "py-2 rounded-lg text-sm font-medium ".concat(form.prevAbnormal === "ok" ? "bg-teal-500 text-white" : "bg-gray-100 text-gray-400") }, "良")),
+          /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return f("prevAbnormal", form.prevAbnormal === "ok" ? null : "ok"); }, className: "py-2 rounded-lg text-sm font-medium ".concat(form.prevAbnormal === "ok" ? "bg-teal-500 text-white" : "bg-gray-100 text-gray-500") }, "良")),
         form.prevAbnormal === "repair" && /*#__PURE__*/React.createElement("textarea", { value: form.prevNote, onChange: function onChange(e) { return f("prevNote", e.target.value); }, rows: 2, placeholder: "異状箇所の詳細を入力", className: "w-full border border-gray-200 rounded px-2 py-1.5 text-xs resize-none" })),
       vehicleHasRepairFlag && /*#__PURE__*/React.createElement("div", { className: "m-3 bg-amber-50 border-2 border-amber-300 rounded-xl px-4 py-3" },
         /*#__PURE__*/React.createElement("p", { className: "text-xs font-bold text-amber-800" }, "「修理対応」の項目があります"),
@@ -5915,7 +6144,7 @@ function ShiftReportScreen(_ref100) {
         /*#__PURE__*/React.createElement("p", { className: "text-xs text-gray-700 mb-1.5" }, "荷主都合による30分以上の待機、または荷役作業がありましたか", /*#__PURE__*/React.createElement("span", { className: "text-red-500" }, "*")),
         /*#__PURE__*/React.createElement("div", { className: "grid grid-cols-2 gap-1.5" },
           /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return f("shipperWaitTaken", form.shipperWaitTaken === "no" ? null : "no"); }, className: "py-2 rounded text-sm ".concat(form.shipperWaitTaken === "no" ? "bg-gray-400 text-white" : "bg-gray-100 text-gray-500") }, "\u306A\u3057"),
-          /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return f("shipperWaitTaken", form.shipperWaitTaken === "yes" ? null : "yes"); }, className: "py-2 rounded text-sm ".concat(form.shipperWaitTaken === "yes" ? "bg-teal-500 text-white" : "bg-gray-100 text-gray-400") }, "\u3042\u308A")),
+          /*#__PURE__*/React.createElement("button", { onClick: function onClick() { return f("shipperWaitTaken", form.shipperWaitTaken === "yes" ? null : "yes"); }, className: "py-2 rounded text-sm ".concat(form.shipperWaitTaken === "yes" ? "bg-teal-500 text-white" : "bg-gray-100 text-gray-500") }, "\u3042\u308A")),
         form.shipperWaitTaken === "yes" && /*#__PURE__*/React.createElement("div", { className: "mt-2 flex flex-col gap-1.5" },
           /*#__PURE__*/React.createElement("input", { value: form.shipperWaitLoc, onChange: function onChange(e) { return f("shipperWaitLoc", e.target.value); }, placeholder: "\u5834\u6240", className: "w-full border border-gray-200 rounded px-2 py-1.5 text-sm" }),
           /*#__PURE__*/React.createElement("input", { value: form.shipperWaitContent, onChange: function onChange(e) { return f("shipperWaitContent", e.target.value); }, placeholder: "\u5185\u5BB9\uFF08\u4F8B\uFF1A\u8377\u5378\u3057\u5F85\u3061\u3001\u30D5\u30A9\u30FC\u30AF\u30EA\u30D5\u30C8\u4F5C\u696D\uFF09", className: "w-full border border-gray-200 rounded px-2 py-1.5 text-sm" }),
@@ -5976,6 +6205,7 @@ function ScheduleScreen(_ref38) {
     orders = _ref38.orders,
     recurringAssignments = _ref38.recurringAssignments,
     customers = _ref38.customers,
+    jobTypes = _ref38.jobTypes,
     onNav = _ref38.onNav;
   var _useState45 = useState(function () {
       var d = new Date();
@@ -6041,10 +6271,13 @@ function ScheduleScreen(_ref38) {
         var dow = new Date(dateKey + "T00:00:00").getDay();
         if (!days.includes(dow)) continue;
         if (recordedRecurringByDate[dateKey] && recordedRecurringByDate[dateKey][ra.id]) continue;
+        // 【検証（ハコログ）で修正】ロイヤリティ契約のドライバーは、定期便の報酬が「売上と同じ額」で記録される
+        // （ロイヤリティは月の控除で引くため、二重に引かない）。見込み額もハコマネの記録と同じ額にする。
+        var hasContractRoyalty = profile && profile.royaltyType !== "none" && (profile.royaltyType === "fixed" ? num(profile.royaltyFixed) > 0 : num(profile.royaltyRate) > 0);
         put(dateKey, "jobs", {
           id: "RA-".concat(ra.id, "-").concat(dateKey),
           customerName: custName,
-          driverPayAmount: ra.driverPayAmount,
+          driverPayAmount: hasContractRoyalty ? num(ra.salesAmount) : ra.driverPayAmount,
           isRecurring: true
         });
       }
@@ -6060,7 +6293,7 @@ function ScheduleScreen(_ref38) {
       return put(e.date, "evs", e);
     });
     return map;
-  }, [records, events, orders, recurringAssignments, customers, y, m, daysInMonth]);
+  }, [records, events, orders, recurringAssignments, customers, profile, y, m, daysInMonth]);
   var cells = [];
   for (var i = 0; i < startDow; i++) cells.push(null);
   for (var d = 1; d <= daysInMonth; d++) cells.push("".concat(y, "-").concat(pad(m + 1), "-").concat(pad(d)));
@@ -6072,8 +6305,9 @@ function ScheduleScreen(_ref38) {
   // 実績（確定額）と、まだ配送完了していない予定（見込み額）を分けて集計する。
   // 混ぜて1つの数字にすると、「確定した報酬」なのか「まだ見込みの金額」
   // なのか区別がつかなくなるため。
+  // 【検証（ハコログ2回目）で修正】差し戻された実績まで日の合計に入っていた（実績画面・報酬画面では除いている）。
   var selSales = sel.recs.reduce(function (s, r) {
-    return s + num(r.driverAmount);
+    return r.approvalStatus === APPROVAL.REJECTED ? s : s + num(r.driverAmount);
   }, 0);
   return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(ScreenHeader, {
     title: "予定"
@@ -6223,8 +6457,10 @@ function ScheduleScreen(_ref38) {
       className: "w-1.5 h-1.5 rounded-full bg-teal-500 flex-shrink-0"
     }), /*#__PURE__*/React.createElement("p", {
       className: "text-sm text-gray-700"
-    }, "\u914D\u9001 ", num(r.count), "\u500B")), /*#__PURE__*/React.createElement("p", {
-      className: "text-sm font-bold text-teal-600"
+    }, (function () { var j = (jobTypes || []).find(function (x) { return x.id === r.jobTypeId; }); return j && j.name ? j.name : "\u914D\u9001"; })(), recordQtyLabel(r) ? " " + recordQtyLabel(r) : ""), r.approvalStatus && r.approvalStatus !== APPROVAL.APPROVED && /*#__PURE__*/React.createElement("span", {
+      className: "text-[10px] font-bold px-1.5 py-0.5 rounded flex-shrink-0 ".concat(r.approvalStatus === APPROVAL.REJECTED ? "bg-red-100 text-red-600" : "bg-amber-100 text-amber-700")
+    }, APPROVAL_LABELS[r.approvalStatus] || r.approvalStatus)), /*#__PURE__*/React.createElement("p", {
+      className: "text-sm font-bold flex-shrink-0 ".concat(r.approvalStatus === APPROVAL.REJECTED ? "text-gray-300 line-through" : "text-teal-600")
     }, yen(r.driverAmount)));
   })), /*#__PURE__*/React.createElement("div", {
     className: "h-6"
@@ -6440,6 +6676,8 @@ function ChatScreen(_ref40) {
     rows: 1,
     placeholder: "\u30E1\u30C3\u30BB\u30FC\u30B8\u3092\u5165\u529B",
     onKeyDown: function onKeyDown(e) {
+      // 日本語入力の変換確定のEnterでは送信しない（書きかけの文が送られてしまうため）
+      if (e.nativeEvent && e.nativeEvent.isComposing || e.keyCode === 229) return;
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         submit();
@@ -6720,7 +6958,7 @@ function ProfileScreen(_ref41) {
     onChange: function onChange(e) {
       return setForm(function (p) { return _objectSpread(_objectSpread({}, p), {}, { licenseAcquired: e.target.value }); });
     },
-    className: "w-full min-w-0 max-w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-base focus:outline-none focus:border-teal-500",
+    className: "w-full min-w-0 max-w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-base bg-white focus:outline-none focus:border-teal-500",
     style: { boxSizing: "border-box" }
   })), /*#__PURE__*/React.createElement(Field, {
     label: "\u6709\u52B9\u671F\u9650\uFF08\u514D\u8A31\u66F4\u65B0\u65E5\uFF09"
@@ -6730,7 +6968,7 @@ function ProfileScreen(_ref41) {
     onChange: function onChange(e) {
       return setForm(function (p) { return _objectSpread(_objectSpread({}, p), {}, { license_expiry: e.target.value }); });
     },
-    className: "w-full min-w-0 max-w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-base focus:outline-none focus:border-teal-500",
+    className: "w-full min-w-0 max-w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-base bg-white focus:outline-none focus:border-teal-500",
     style: { boxSizing: "border-box" }
   })), /*#__PURE__*/React.createElement(Field, {
     label: "\u514D\u8A31\u6761\u4EF6"
@@ -6775,7 +7013,7 @@ function ProfileScreen(_ref41) {
     onChange: function onChange(e) {
       return setForm(function (p) { return _objectSpread(_objectSpread({}, p), {}, { vehicleInspectionExpiry: e.target.value }); });
     },
-    className: "w-full min-w-0 max-w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-base focus:outline-none focus:border-teal-500",
+    className: "w-full min-w-0 max-w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-base bg-white focus:outline-none focus:border-teal-500",
     style: { boxSizing: "border-box" }
   })), /*#__PURE__*/React.createElement(Field, {
     label: "\u81EA\u8CE0\u8CAC\u4FDD\u967A\u671F\u9650"
@@ -6785,7 +7023,7 @@ function ProfileScreen(_ref41) {
     onChange: function onChange(e) {
       return setForm(function (p) { return _objectSpread(_objectSpread({}, p), {}, { liabilityInsuranceExpiry: e.target.value }); });
     },
-    className: "w-full min-w-0 max-w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-base focus:outline-none focus:border-teal-500",
+    className: "w-full min-w-0 max-w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-base bg-white focus:outline-none focus:border-teal-500",
     style: { boxSizing: "border-box" }
   })), /*#__PURE__*/React.createElement(Field, {
     label: "\u4EFB\u610F\u4FDD\u967A\u4F1A\u793E"
@@ -6860,6 +7098,15 @@ function ProfileScreen(_ref41) {
     label: "\u4FDD\u967A\u6599",
     value: profile !== null && profile !== void 0 && profile.insuranceMonthly ? "".concat(yen(profile.insuranceMonthly), "\uFF0F\u6708") : "",
     locked: true
+  }),
+  // 【検証（ハコログ）で追加】報酬から毎月引かれる制服代・備品代・その他の控除も、設定されていれば表示する
+  // （以前はリース・保険だけで、報酬画面で引かれている他の控除がどこにも書かれていなかった）。
+  profile && num(profile.uniformMonthly) > 0 && /*#__PURE__*/React.createElement(Row, {
+    label: "制服代", value: "".concat(yen(profile.uniformMonthly), "／月"), locked: true
+  }), profile && num(profile.suppliesMonthly) > 0 && /*#__PURE__*/React.createElement(Row, {
+    label: "備品代", value: "".concat(yen(profile.suppliesMonthly), "／月"), locked: true
+  }), profile && num(profile.otherDeductionMonthly) > 0 && /*#__PURE__*/React.createElement(Row, {
+    label: profile.otherDeductionNote || "その他控除", value: "".concat(yen(profile.otherDeductionMonthly), "／月"), locked: true
   })), /*#__PURE__*/React.createElement(Card, {
     className: "overflow-hidden flex-shrink-0"
   }, /*#__PURE__*/React.createElement("div", {
@@ -7756,7 +8003,7 @@ function App() {
             matchedRouteForSave = (Array.isArray(profile === null || profile === void 0 ? void 0 : profile.routes) ? profile.routes : []).find(function (r) {
               return r.jobTypeId === sanitized.jobTypeId;
             });
-            dekaRatesForSave = (jt === null || jt === void 0 ? void 0 : jt.name) === "\u30C7\u30AB\u5B85" ? (matchedRouteForSave && Array.isArray(matchedRouteForSave.dekaRates) ? matchedRouteForSave.dekaRates : Array.isArray(jt === null || jt === void 0 ? void 0 : jt.dekaRates) ? jt.dekaRates : []) : null;
+            dekaRatesForSave = (jt === null || jt === void 0 ? void 0 : jt.name) === "\u30C7\u30AB\u5B85" ? mergeDekaRates(matchedRouteForSave && matchedRouteForSave.dekaRates, jt === null || jt === void 0 ? void 0 : jt.dekaRates) : null;
             amounts = calcRecordAmounts(sanitized, jt, dekaRatesForSave, matchedRouteForSave);
             status = mode === "submit" ? APPROVAL.SUBMITTED : APPROVAL.DRAFT;
             payload = _objectSpread(_objectSpread(_objectSpread({}, sanitized), amounts), {}, {
@@ -8044,7 +8291,7 @@ function App() {
               var matchedRouteForResubmit = (Array.isArray(profile === null || profile === void 0 ? void 0 : profile.routes) ? profile.routes : []).find(function (rt) {
                 return rt.jobTypeId === r.jobTypeId;
               });
-              var dekaRatesForResubmit = (jtForRecord === null || jtForRecord === void 0 ? void 0 : jtForRecord.name) === "\u30C7\u30AB\u5B85" ? (matchedRouteForResubmit && Array.isArray(matchedRouteForResubmit.dekaRates) ? matchedRouteForResubmit.dekaRates : Array.isArray(jtForRecord === null || jtForRecord === void 0 ? void 0 : jtForRecord.dekaRates) ? jtForRecord.dekaRates : []) : null;
+              var dekaRatesForResubmit = (jtForRecord === null || jtForRecord === void 0 ? void 0 : jtForRecord.name) === "\u30C7\u30AB\u5B85" ? mergeDekaRates(matchedRouteForResubmit && matchedRouteForResubmit.dekaRates, jtForRecord === null || jtForRecord === void 0 ? void 0 : jtForRecord.dekaRates) : null;
               var amounts = calcRecordAmounts(sanitized, jtForRecord, dekaRatesForResubmit, matchedRouteForResubmit);
               return _objectSpread(_objectSpread(_objectSpread({}, sanitized), amounts), {}, {
                 approvalStatus: APPROVAL.SUBMITTED,
@@ -8261,6 +8508,10 @@ function App() {
   var notices = useMemo(function () {
     // events のうち、お知らせ種別のものをドライバー向けに表示する
     var kindOf = function kindOf(e) {
+      // 【不具合修正】ハコマネの「お知らせ配信」で選んだ種別（kind）を優先する。以前はタイトルの
+      // 文言だけで推測していたため、「重要」で配信しても題名に「重要」が無いと「お知らせ」扱いになり、
+      // 赤い表示にも並び順の優先にもならなかった。
+      if (["important", "price", "project", "event", "info"].includes(e.kind)) return e.kind;
       var t = "".concat(e.type || "").concat(e.title || "");
       if (/重要|緊急/.test(t)) return "important";
       if (/単価/.test(t)) return "price";
@@ -8836,6 +9087,7 @@ function App() {
           orders: orders,
           recurringAssignments: recurringAssignments,
           customers: customers,
+          jobTypes: jobTypes,
           onNav: setScreen
         });
       case "shift-report-pre":
